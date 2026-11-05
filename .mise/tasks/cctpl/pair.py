@@ -11,12 +11,9 @@ Where every pair-specific fact lives:
 ``.claude/skills/cctpl-base-cn/references/02-repo-layout.md``, "Where Facts Live".
 """
 
-import tomllib
-from pathlib import Path
-
 # --- GitHub coordinates of the tpl repo (publish, verify, README)
 GITHUB_OWNER = "MacHu-GWU"
-GITHUB_REPO = "cookiecutter-internal_aws_lbd"
+GITHUB_REPO = "cookiecutter-aws_agentcore_runtime_basic"
 
 # --- the template dir: the project folder name inside the template
 TEMPLATE_DIR_NAME = "{{ cookiecutter.package_name }}-project"
@@ -26,50 +23,27 @@ TEMPLATE_DIR_NAME = "{{ cookiecutter.package_name }}-project"
 # The cookiecutter variable holding the Python version a generated project uses.
 PYTHON_VERSION_VARIABLE = "dev_python_version"
 
-# The preset whose values point at a private package index this machine can
-# read. Generated projects install their dependencies from AWS CodeArtifact,
-# and the seed depends on a package that only the esc repository has, so only
-# a project rendered with this preset can install: L4 (test-output) and L5
-# (verify-release) install and test that one and only build a wheel of the
-# others; try-template without an argument (so also e2e) uses it.
-# None for a pair whose default-value project installs from public indexes.
-TRIAL_PRESET = "esc-sanhe-dev"
-
 # How L4 / L5 install a generated project and run its tests, without mise.
-# Run in the project dir after "uv venv --python <version>", with the extra
-# environment of project_install_env(). The project's own codeartifact-env.sh
-# fetches a read-only CodeArtifact token with the AWS profile named there.
-INSTALL_COMMAND = [
-    "bash",
-    "-c",
-    ". .mise/tasks/codeartifact-env.sh && uv sync --all-extras",
-]
+# Run in the project dir after "uv venv --python <version>". The runtime code
+# (MCP server, agent) is in the ``agentcore`` dependency group, so install every
+# group as the project's own ``inst`` task does. The CDK synth tests need a
+# ``node`` on PATH (aws-cdk-lib runs on jsii), which mise provides globally on
+# the maintainer's machine; no AWS credentials are needed. ``tests_int/`` needs
+# deployed stacks and runtimes, so it is never run here.
+INSTALL_COMMAND = ["uv", "sync", "--all-extras", "--all-groups"]
 TEST_COMMAND = [".venv/bin/pytest", "tests", "-q"]
 
-
-def project_install_env(dir_project: Path) -> dict[str, str]:
-    """
-    The extra environment ``INSTALL_COMMAND`` needs in ``dir_project``: the
-    plain (non-secret) ``AWS_CODEARTIFACT_*`` values of the project's
-    ``mise.toml`` [env], which mise would otherwise provide.
-    """
-    path = dir_project / "mise.toml"
-    if not path.is_file():
-        return {}
-    with open(path, "rb") as f:
-        env = tomllib.load(f).get("env", {})
-    return {k: str(v) for k, v in env.items() if k.startswith("AWS_CODEARTIFACT_")}
-
-
 # The generated project's own mise tasks that the Local Trial runs, in order.
-# All local, no write to AWS: lambda-layer-build-only builds the layer (reading
-# private packages from CodeArtifact, like inst), cdk-synth-dev-all runs
-# lambda-source-build and synthesizes every stack of dev with the cdk CLI.
+# All local, no AWS call: unit tests with coverage, the docs, the CloudFormation
+# templates of every dev stack, then the AgentCore project of dev (generate it,
+# check every runtime's wheels for Linux aarch64). Not ac-build: it needs
+# 'npm install' in agentcore/cdk/ first, which no task of the project runs.
 PROJECT_TASKS = [
     "venv-create",
     "inst",
     "cov",
     "build-doc",
-    "lambda-layer-build-only",
     "cdk-synth-dev-all",
+    "ac-gen",
+    "ac-check-wheels",
 ]

@@ -24,7 +24,7 @@ cookiecutter-<name>/
 │       │   ├── cookiecutter.json
 │       │   ├── hooks/
 │       │   └── {{ cookiecutter.package_name }}-project/
-│       ├── output/                        # 用 template/ 生成的测试项目 (默认值一个, choices/ 下每个额外可选值一个, presets/ 下 Trial Preset 一个)
+│       ├── output/                        # 用 template/ 生成的测试项目 (默认值一个, choices/ 下每个额外可选值一个)
 │       ├── roundtrip/                     # 用 seed 自己的值重新渲染 template/ 得到的项目, 用来和 seed 比较
 │       ├── try/                           # 本地试用: 生成的项目和日志, 默认值或每个 preset 一个子目录
 │       └── verify/                        # 发布后从 GitHub 拉取已发布模板生成的项目
@@ -65,13 +65,13 @@ seed repo 就是一个普通的, 由本模板 (或其前身) 生成的项目. �
 ├── pyproject.toml                                  # 共用版本号的唯一源头 (见 01 的 One Shared Version)
 ├── release-history.rst                             # template content: 生成项目的 changelog 起点, 永远不为 seed 的发布而修改
 ├── release-history-seed-repo.rst                   # seed-only: seed 自己的 changelog
-└── .claude/skills/pywf-priv-changelog-seed-repo/    # seed-only: bump 共用版本号, 维护 seed changelog
+└── .claude/skills/pywf-oss-changelog-seed-repo/    # seed-only: bump 共用版本号, 维护 seed changelog
 ```
 
 本家族只对 seed 提出以下约束:
 
 - **不放维护逻辑, seed-only 文件除外.** 不放 `cctpl-*-cn`, 不放维护用的 settings, 不放参数化脚本. seed 的 `.claude/` 会进入模板. seed-only 文件 (上图中标为 seed-only 的两项) 是唯一的例外, 它们都在参数化脚本的 `EXCLUDE` 中, 不进入模板.
-- **像普通 Python 库一样发版, 但 changelog 写在 seed-only 文件里.** seed 的每个版本由 `pywf-priv-changelog-seed-repo` bump 版本号并在 `release-history-seed-repo.rst` 中写条目, 再由人在 seed 中运行它自己的发布 task (打同名 tag; seed 发布到 PyPI 时也在这一步). seed 的 `release-history.rst` 是 template content, 不记录 seed 自己的迭代; tpl 的 Sync 中的 `check-version` 发现它出现当前版本的条目时会失败.
+- **像普通 Python 库一样发版, 但 changelog 写在 seed-only 文件里.** seed 的每个版本由 `pywf-oss-changelog-seed-repo` bump 版本号并在 `release-history-seed-repo.rst` 中写条目, 再由人在 seed 中运行它自己的发布 task (打同名 tag; seed 发布到 PyPI 时也在这一步). seed 的 `release-history.rst` 是 template content, 不记录 seed 自己的迭代; tpl 的 Sync 中的 `check-version` 发现它出现当前版本的条目时会失败.
 - **seed-only 文件不被模板内容提及.** 进入模板的文件 (例如 seed 中其他 skill 的文档, `CLAUDE.md`) 不提 seed-only 文件, 否则生成的项目会指向不存在的东西.
 - **seed value 必须足够独特.** 每个 seed value 在 seed 中只应出现在 "需要被参数化" 的位置. 如果某个 seed value 恰好也出现在无关位置 (例如版本号字符串碰巧等于某个依赖的版本), 会被误替换. 包名, 仓库名这类值靠 `_demo` 命名空间天然独特 (见 01 的 Naming Convention); 版本号, license 这类通用值无法独特, 由参数化规则限定替换范围.
 - **不参与模板的文件不从 seed 中删除.** 被 seed 的 `.gitignore` 忽略的文件 (`.venv`, 缓存, 构建产物, 本地私有配置) 天然不进入参数化, 不需要任何处理. 进了 git 但不该进模板的少数文件 (例如由 hooks 重新生成的 `LICENSE.txt`), 由 tpl repo 的参数化脚本排除. seed 需要它们才能作为真实项目运行, 所以不能删.
@@ -134,7 +134,7 @@ preset 分支完全由 `main` + 覆盖文件决定, 不接受直接修改. 想�
 | seed repo 的本地路径, 以及 seed 在 GitHub 上的仓库名 (就是这个目录的名字, 与 tpl repo 同一个 owner; 用于 `README.rst` 和 tpl changelog 中的 seed 链接) | tpl repo `mise.toml` 的 `[env] CCTPL_SEED_DIR`, 唯一源头. 代码通过 `cctpl.get_seed_repo_name()` 读取, 不另存一份 | 改写. 本地目录名必须与 seed 的 GitHub 仓库名相同 |
 | 同上, 供 Claude Code 访问 | tpl repo `.claude/settings.json` 的 `permissions.additionalDirectories`, 写成相对 tpl repo 根目录的路径 (例如 `../<seed repo>`). **必须与 `CCTPL_SEED_DIR` 指向同一目录** | 改写 |
 | seed values, parameters, 以及参数化的各类声明 (exclude, no_render, hooks 产物, 需要逐个可选值测试的变量, 独特值, 允许原样保留的位置) | tpl repo 的参数化脚本 `.mise/tasks/make_template.py` 中的模块级常量. 该文件的其余部分 (生成模板的流程) 是通用的 | 改写声明部分 |
-| GitHub owner 和 tpl repo 名, template dir 的名字, 生成项目用哪个变量决定 Python 版本, 生成项目的安装和测试命令 (及其所需的额外环境变量), 哪个 preset 是 Trial Preset, 本地试用运行哪些 task | `.mise/tasks/cctpl/pair.py`. 通用代码只从这里读取这些值 | 改写 |
+| GitHub owner 和 tpl repo 名, template dir 的名字, 生成项目用哪个变量决定 Python 版本, 生成项目的安装和测试命令, 本地试用运行哪些 task | `.mise/tasks/cctpl/pair.py`. 通用代码只从这里读取这些值 | 改写 |
 | 对 cookiecutter 输入的额外校验 (例如只接受受支持的 Python 版本) | `hooks/pre_gen_project.py` | 沿用目标, 按需新增 |
 | hooks 生成的内容 (例如 license 文件) | `hooks/post_gen_project.py` | 沿用目标, 按需新增 |
 | tpl repo `README.rst` 的说明文字 | `.mise/tasks/cctpl/README.rst.jinja`. 其中 Overview 和 Disclaimer 两节与仓库对相关, 其余是通用的 | 改写这两节 |
@@ -142,7 +142,7 @@ preset 分支完全由 `main` + 覆盖文件决定, 不接受直接修改. 想�
 | 共用版本号 | seed repo `pyproject.toml`, 唯一源头. make-template 把它写入 `cookiecutter.json` 的私有变量 `_template_version`; apply-template 把它写入 tpl repo 的 `pyproject.toml`, `uv.lock` 和 `README.rst` | 两边取较大者, 再升一个 major, 同时写入 seed (见 `cctpl-fork-cn`) |
 | tpl 的 changelog | tpl repo `release-history.rst` | 沿用目标, 新条目按新格式 |
 | seed 的 changelog | seed repo `release-history-seed-repo.rst` (seed-only) | 新建 |
-| 维护 seed changelog 的 skill | seed repo `.claude/skills/pywf-priv-changelog-seed-repo/` (seed-only), 其中写死了 tpl repo 的 GitHub 地址 | 拷贝, 改写 tpl repo 地址 |
+| 维护 seed changelog 的 skill | seed repo `.claude/skills/pywf-oss-changelog-seed-repo/` (seed-only), 其中写死了 tpl repo 的 GitHub 地址 | 拷贝, 改写 tpl repo 地址 |
 | seed-only 文件不进入模板 | `make_template.py` 的 `EXCLUDE` | 拷贝这两条 |
 | 有哪些 preset, 各自覆盖了什么 | tpl repo `main` 上的 `presets/*.json` | 改写 (目标是 1.0 仓库时, 由它的 preset 分支生成) |
 | 可用的 mise task | tpl repo `mise.toml`, 或运行 `mise tasks ls` | cctpl 的 task 逐字拷贝 |

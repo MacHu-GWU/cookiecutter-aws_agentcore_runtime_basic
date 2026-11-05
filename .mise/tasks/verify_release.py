@@ -13,8 +13,6 @@ For each branch (default: ``main`` plus ``preset/<name>`` for every
    branch's defaults into ``.../local/`` and compare: they must be identical.
    This catches files lost or stale in publishing, and wrong preset values.
 3. Install the remote project and run its tests (06-verification.md, L5).
-   Only a project that can install does so (``TRIAL_PRESET`` in
-   ``cctpl/pair.py``); of the others a wheel is built.
 
 Exits 1 if any branch fails. Spec: 06-verification.md, "L5: After Publish".
 """
@@ -49,13 +47,7 @@ def _compare(dir_local: Path, dir_remote: Path) -> list[str]:
     return problems
 
 
-def verify(
-    branch: str,
-    preset: str | None,
-    overrides: dict,
-    base_json: dict,
-    config_file: Path,
-) -> list[str]:
+def verify(branch: str, overrides: dict, base_json: dict, config_file: Path) -> list[str]:
     dir_branch = cctpl.dir_verify / branch.replace("/", "--")
     dir_remote = dir_branch / "remote"
     dir_local = dir_branch / "local"
@@ -87,11 +79,8 @@ def verify(
     problems = [f"compare: {p}" for p in _compare(out_local, out_remote)]
 
     python = cctpl.apply_preset(base_json, overrides)[cctpl.PYTHON_VERSION_VARIABLE]
-    if cctpl.is_installable(preset):
-        if not cctpl.run_project_tests(out_remote, python):
-            problems.append("tests: install or tests failed (see output above)")
-    elif not cctpl.build_wheel(out_remote, python):
-        problems.append("build: wheel build failed (see output above)")
+    if not cctpl.run_project_tests(out_remote, python):
+        problems.append("tests: install or tests failed (see output above)")
     return problems
 
 
@@ -123,9 +112,8 @@ def main() -> int:
         if branch.startswith(cctpl.PRESET_BRANCH_PREFIX) and name not in presets:
             results[branch] = [f"no presets/{name}.json for this branch"]
             continue
-        preset = name if branch != "main" else None
-        overrides = presets.get(name, {}) if preset else {}
-        results[branch] = verify(branch, preset, overrides, base_json, config_file)
+        overrides = presets.get(name, {}) if branch != "main" else {}
+        results[branch] = verify(branch, overrides, base_json, config_file)
 
     print("\n=== Verify result")
     for branch, problems in results.items():

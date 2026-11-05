@@ -64,10 +64,10 @@ cctpl 家族的作用就是让 AI agent 承担这部分成本: 把流程写成�
 
 | 对象 | 命名 | 例子 |
 | :--- | :--- | :--- |
-| tpl repo | `cookiecutter-<name>` | `cookiecutter-internal_aws_lbd` |
-| seed repo | `cookiecutter_<name>_demo-project` 或 `cookiecutter_<name>_template-project` | `cookiecutter_internal_aws_lbd_demo-project` |
-| seed 的包名 | seed repo 去掉 `-project` 后缀 | `cookiecutter_internal_aws_lbd_demo` |
-| preset 分支 | `preset/<name>` | `preset/esc-sanhe-dev` |
+| tpl repo | `cookiecutter-<name>` | `cookiecutter-aws_lbd` |
+| seed repo | `cookiecutter_<name>_demo-project` 或 `cookiecutter_<name>_template-project` | `cookiecutter_aws_lbd_demo-project` |
+| seed 的包名 | seed repo 去掉 `-project` 后缀 | `cookiecutter_aws_lbd_demo` |
+| preset 分支 | `preset/<name>` | `preset/sanhe` |
 
 seed 的包名, 仓库名都有独立的命名空间, 所以它们作为 seed value 被替换时不会和项目中的其他字符串冲突. 这是选择这种命名的主要原因.
 
@@ -93,7 +93,7 @@ seed 的包名, 仓库名都有独立的命名空间, 所以它们作为 seed va
 | 位置 | 放什么 | 影响范围 |
 | :--- | :--- | :--- |
 | seed repo `.claude/skills/` | 每个生成的项目都应该有的 skill | 会被参数化进模板, 进入所有生成的项目 |
-| seed repo 的 seed-only skill | 只服务于 seed 自身维护的 skill. 目前只有一个: 维护 seed changelog 的 `pywf-priv-changelog-seed-repo` (见下文 One Shared Version) | 只在 seed 中生效. 在参数化脚本的 exclude 列表中声明, 不进入模板 |
+| seed repo 的 seed-only skill | 只服务于 seed 自身维护的 skill. 目前只有一个: 维护 seed changelog 的 `pywf-oss-changelog-seed-repo` (见下文 One Shared Version) | 只在 seed 中生效. 在参数化脚本的 exclude 列表中声明, 不进入模板 |
 | tpl repo `.claude/skills/` | 维护 seed → tpl → 发布这套流程的 skill: 本家族 `cctpl-*-cn`, 以及它依赖的工具 skill (`/pypi-cookiecutter_maker`) | 只在 tpl repo 中生效, 不进入模板 |
 
 **维护用的东西默认不放进 seed.** seed 的 `.claude/` 是模板内容的一部分, 放进去的任何东西都会被分发到每一个生成的项目. 唯一的例外是 **seed-only 文件**: 只对 seed 自身有意义, 并且已在参数化脚本的 exclude 列表中声明的文件. 目前只有两个: seed changelog `release-history-seed-repo.rst`, 和维护它的 seed-only skill. 新增 seed-only 文件必须同时加入 exclude 列表. 模板内容 (包括 seed 中进入模板的 skill) 永远不提及 seed-only 文件.

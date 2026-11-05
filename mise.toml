@@ -4,15 +4,12 @@
 # without the secret (publish-template fails early if it is empty).
 GITHUB_TOKEN = "{{ exec(command='uvx --from home-secret-toml hst get github.accounts.sh.users.sh.secrets.dev.value || true') }}"
 # The seed repo this template is made from. Keep in sync with permissions.additionalDirectories in .claude/settings.json
-CCTPL_SEED_DIR = "{{env.HOME}}/Documents/GitHub/cookiecutter_internal_aws_lbd_demo-project"
+CCTPL_SEED_DIR = "{{env.HOME}}/Documents/GitHub/cookiecutter_aws_agentcore_runtime_basic_demo-project"
 
 [tools]
 python = "3.12"
 uv = "latest"
 claude = "latest"
-# Generated projects fetch their AWS CodeArtifact token with the AWS CLI
-# (test-output, verify-release); mise.toml of the seed pins the same major.
-awscli = "2"
 
 # === Tasks ===
 # Python Environment Management
@@ -46,7 +43,7 @@ run = ".venv/bin/python .mise/tasks/check_seed_values.py"
 depends = ["inst"]
 
 [tasks.test-template]
-description = "Generate projects from the template with default values, plus one per extra value of each covered choice variable, plus one with TRIAL_PRESET"
+description = "Generate projects from the template with default values, plus one per extra value of each covered choice variable"
 depends = ["inst"]
 run = ".venv/bin/python .mise/tasks/test_template.py"
 
@@ -63,7 +60,7 @@ description = "Check presets/*.json against the generated cookiecutter.json"
 run = ".venv/bin/python .mise/tasks/check_presets.py"
 
 [tasks.test-output]
-description = "Install and test the TRIAL_PRESET generated project with uv and pytest (reads a CodeArtifact token, no other secret), build a wheel of the others; slow, not part of sync"
+description = "Install and test the default-value generated project with uv and pytest (no secrets needed); slow, not part of sync"
 depends = ["inst"]
 run = ".venv/bin/python .mise/tasks/test_output.py"
 
@@ -86,12 +83,12 @@ run = [
 ]
 
 [tasks.try-template]
-description = "Local trial: make the template, render a project (TRIAL_PRESET of cctpl/pair.py by default; 'mise run try-template <preset>' or 'mise run try-template defaults'), then run its venv-create, inst, cov, build-doc, lambda-layer-build-only, cdk-synth-dev-all through mise, logging every step"
+description = "Local trial: make the template, render a project (optionally with a preset: 'mise run try-template bmt'), then run its venv-create, inst, cov, build-doc, cdk-synth-dev-all, ac-gen, ac-check-wheels through mise (all local, no AWS call), logging every step"
 depends = ["inst"]
 run = ".venv/bin/python .mise/tasks/try_template.py"
 
 [tasks.e2e]
-description = "End to end, local only: sync (make, check, apply), then try-template with TRIAL_PRESET (render a project, run its venv-create, inst, cov, build-doc, lambda-layer-build-only, cdk-synth-dev-all through mise)"
+description = "End to end, local only: sync (make, check, apply), then try-template with the defaults (render a project, run its venv-create, inst, cov, build-doc, cdk-synth-dev-all, ac-gen, ac-check-wheels through mise)"
 run = [
     "mise run sync",
     "mise run try-template",

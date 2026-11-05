@@ -1,0 +1,151 @@
+# [project] table: https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
+[project]
+name = "{{ cookiecutter.package_name }}"
+# Bump before each release (https://semver.org/), then ``mise run inst`` to update ``uv.lock``.
+version = "{{ cookiecutter.version }}"
+description = "A template for a multi-environment AWS Bedrock AgentCore project: MCP server and agent runtimes, written local first, deployed by the AgentCore CLI next to CDK stacks, run with mise."
+# An SPDX license expression (PEP 639); keep ``LICENSE.txt`` in sync.
+# Read: https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license-and-license-files
+# Valid identifiers: https://spdx.org/licenses/
+license = "{{ cookiecutter.license }}"
+license-files = ["LICENSE.txt", "AUTHORS.rst"]
+authors = [
+    { name = "{{ cookiecutter.author }}", email = "{{ cookiecutter.author_email }}" },
+]
+maintainers = [
+    { name = "{{ cookiecutter.author }}", email = "{{ cookiecutter.author_email }}" },
+]
+keywords = []
+readme = "README.rst"
+requires-python = ">=3.11,<4.0"
+# Read: https://pypi.org/classifiers/
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: Unix",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+# --- Dependencies ---
+# Edit these lists, then ``mise run inst`` to update ``uv.lock`` and ``.venv``.
+dependencies = [
+    "aws-cdk-lib>=2.273.0,<3.0.0", # AWS CDK constructs, synthesized to CloudFormation
+    "boto3>=1.42.97,<2.0.0", # AWS SDK, behind one.boto_ses
+    "boto-session-manager>=2.1.1,<3.0.0", # the boto session of the current environment, one.bsm
+    "cdk-mate>=1.0.0,<2.0.0", # run the cdk CLI from Python with an environment's boto session
+    "json5>=0.17.3,<1.0.0", # parse the config/*.json5 files (comments allowed)
+    "pydantic>=2.14.1,<3.0.0", # validate the Config model
+    "simple-aws-ssm-parameter-store>=0.3.0,<1.0.0", # write the config to SSM only when it changed
+    "sqlalchemy>=2.0.0,<2.1.0", # the power plant database, one.engine; 2.1.7 is on PyPI without wheels, and the runtimes install wheels only
+]
+
+# --- Optional dependencies (extras) ---
+# Read: https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#dependencies-optional-dependencies
+# Each one must support every Python version in ``requires-python``.
+[project.optional-dependencies]
+
+# local development
+dev = [
+    "rich>=14.3.4,<15.0.0",
+]
+
+# tests and coverage
+test = [
+    "pytest>=9.1.1,<10.0.0",
+    "pytest-cov>=7.1.0,<8.0.0",
+    "moto>=5.1.21,<6.0.0", # mock AWS services (SSM) in tests
+]
+
+# docs build
+doc = [
+    "Sphinx>=8.2.3,<9.0.0", # held below 9 until its autodoc rewrite is verified
+    "sphinx-copybutton>=0.5.2,<1.0.0", # copy button on code blocks
+    "sphinx-design>=0.7.0,<1.0.0", # cards, tabs, grids
+    "sphinx-jinja>=2.0.2,<3.0.0", # jinja in reST
+    "furo==2025.12.19", # theme
+    "pygments>=2.18.0,<3.0.0", # syntax highlighting
+    "ipython>=8.18.1,<8.19.0", # notebook execution
+    "ipykernel>=7.3.0,<8.0.0", # notebook kernel
+    "nbsphinx>=0.9.8,<1.0.0", # notebooks as doc pages
+    "rstobj>=2.0.0,<3.0.0", # reST from Python
+    "docfly>=3.0.3,<4.0.0", # toctree and API reference
+]
+
+# mise tasks
+mise = [
+    "PyGithub>=2.8.0,<3.0.0", # GitHub API client
+    "httpx2>=2.13.1,<3.0.0", # Codecov and Read the Docs APIs
+]
+
+# --- Dependency groups ---
+# Read: https://docs.astral.sh/uv/concepts/projects/dependencies/#dependency-groups
+[dependency-groups]
+
+# Code that runs inside the AgentCore Runtimes (MCP server, agent). One set for every runtime.
+# A group, not an extra, so ``uv export --only-group agentcore`` emits these (pinned by uv.lock)
+# without the base dependencies above, which stay on the dev machine (aws-cdk-lib and others).
+agentcore = [
+    "aws-opentelemetry-distro>=0.22.0,<1.0.0", # AgentCore observability; in the CLI templates
+    "bedrock-agentcore[strands-agents]>=1.25.2,<2.0.0", # BedrockAgentCoreApp, the agent runtime's HTTP server
+    "boto-session-manager>=2.1.1,<3.0.0", # one.bsm, the runtime's boto session
+    "botocore[crt]>=1.43.0,<2.0.0", # in the CLI agent template; crt for SigV4 and faster transfers
+    "mcp>=1.28.1,<2.0.0", # FastMCP server and client; bedrock-agentcore[strands-agents] needs mcp<2
+    "pydantic>=2.14.1,<3.0.0", # the Config model, read from SSM
+    "simple-aws-ssm-parameter-store>=0.3.0,<1.0.0", # read the config from SSM
+    "sqlalchemy>=2.0.0,<2.1.0", # the power plant database, one.engine; 2.1.7 is on PyPI without wheels, and the runtimes install wheels only
+    "strands-agents>=1.63.0,<2.0.0", # the agent framework
+]
+
+[project.urls]
+Homepage = "https://github.com/{{ cookiecutter.github_username }}/{{ cookiecutter.package_name }}-project"
+Documentation = "https://{{ cookiecutter.package_name | slugify }}.readthedocs.io/en/latest/"
+Repository = "https://github.com/{{ cookiecutter.github_username }}/{{ cookiecutter.package_name }}-project"
+Issues = "https://github.com/{{ cookiecutter.github_username }}/{{ cookiecutter.package_name }}-project/issues"
+Changelog = "https://github.com/{{ cookiecutter.github_username }}/{{ cookiecutter.package_name }}-project/blob/main/release-history.rst"
+
+# Read: https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#creating-executable-scripts
+[project.scripts]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "{{ cookiecutter.package_name }}*",
+]
+exclude = [
+    "{{ cookiecutter.package_name }}.tests",
+    "{{ cookiecutter.package_name }}.tests.*",
+    "{{ cookiecutter.package_name }}.docs",
+    "{{ cookiecutter.package_name }}.docs.*",
+]
+
+# --- ruff: ``mise run format`` / ``mise run lint`` ---
+[tool.ruff]
+extend-exclude = [
+    "{{ cookiecutter.package_name }}/vendor",
+    ".claude/skills/*/assets", # templates, not valid Python
+]
+
+[tool.ruff.lint.per-file-ignores]
+# re-export modules
+"**/__init__.py" = ["F401"]
+"**/api.py" = ["F401"]
+
+# --- pytest 9+ native table ---
+# Read: https://docs.pytest.org/en/stable/reference/customize.html#pyproject-toml
+[tool.pytest]
+testpaths = ["tests"]
+# strict = true # only with a pinned pytest
+# filterwarnings = ["error"]
+# markers = ["slow: tests that take more than a few seconds"]
+
+# --- Build (``mise run build``); setuptools 77+ for PEP 639 ``license`` ---
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"

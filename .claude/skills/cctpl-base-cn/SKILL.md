@@ -43,6 +43,6 @@ cctpl 家族负责维护一对 cookiecutter 仓库: seed repo (可运行的具�
 以下 skill 不属于本家族, 但本家族依赖它们:
 
 - `/pypi-cookiecutter_maker`: 与本家族放在同一个 tpl repo 的 `.claude/skills/` 下. 参数化所用的 `cookiecutter_maker` 库的 API. 本家族不重复其内容.
-- `pywf-priv-changelog-seed-repo`: 放在 **seed** 的 `.claude/skills/` 下 (seed-only, 不进入模板). bump 共用版本号, 维护 seed 的 `release-history-seed-repo.rst`. Seed Release 阶段使用. 它写死了 tpl repo 的 GitHub 地址, fork 时改写.
+- `pywf-oss-changelog-seed-repo`: 放在 **seed** 的 `.claude/skills/` 下 (seed-only, 不进入模板). bump 共用版本号, 维护 seed 的 `release-history-seed-repo.rst`. Seed Release 阶段使用. 它写死了 tpl repo 的 GitHub 地址, fork 时改写.
 
 这对仓库自己的当前状态 (未完成的事项) 不写在本 skill 中, 而是写在 tpl repo `CLAUDE.md` 的 Current Status 一节.

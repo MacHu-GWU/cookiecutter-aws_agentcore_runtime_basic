@@ -52,7 +52,7 @@ def collect_problems() -> list[str]:
     elif cctpl.find_changelog_heading(path_seed_log.read_text(encoding="utf-8"), version) is None:
         problems.append(
             f"seed {cctpl.SEED_CHANGELOG}: no '{version} (YYYY-MM-DD)' section; "
-            "write it with the seed's pywf-priv-changelog-seed-repo skill"
+            "write it with the seed's pywf-oss-changelog-seed-repo skill"
         )
 
     path_template_log = dir_seed / cctpl.SEED_TEMPLATE_CHANGELOG

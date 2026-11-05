@@ -307,8 +307,8 @@ wheels = [
 ]
 
 [[package]]
-name = "cookiecutter-internal-aws-lbd"
-version = "1.1.0"
+name = "cookiecutter-aws-agentcore-runtime-basic"
+version = "1.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "cookiecutter" },

@@ -6,12 +6,12 @@
 # Spec: .claude/skills/cctpl-base-cn/references/08-versioning-and-release.md
 # ==============================================================================
 [project]
-name = "cookiecutter_internal_aws_lbd"
+name = "cookiecutter_aws_agentcore_runtime_basic"
 # A copy of the seed's version: seed and tpl share one version, and the seed's
 # pyproject.toml is its only source. Never edit it here: `mise run sync` writes
 # it here, into uv.lock, cookiecutter.json (_template_version) and README.rst.
-version = "1.1.0"
-description = "Cookiecutter template for internal proprietary AWS Lambda projects deployed with AWS CDK, with private packages from AWS CodeArtifact"
+version = "1.0.0"
+description = "Cookiecutter template for multi-environment AWS Bedrock AgentCore Runtime projects in Python"
 license = "MIT"
 license-files = ["LICENSE.txt", "AUTHORS.rst"]
 authors = [
@@ -33,10 +33,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/MacHu-GWU/cookiecutter-internal_aws_lbd"
-Repository = "https://github.com/MacHu-GWU/cookiecutter-internal_aws_lbd"
-Issues = "https://github.com/MacHu-GWU/cookiecutter-internal_aws_lbd/issues"
-Changelog = "https://github.com/MacHu-GWU/cookiecutter-internal_aws_lbd/blob/main/release-history.rst"
+Homepage = "https://github.com/MacHu-GWU/cookiecutter-aws_agentcore_runtime_basic"
+Repository = "https://github.com/MacHu-GWU/cookiecutter-aws_agentcore_runtime_basic"
+Issues = "https://github.com/MacHu-GWU/cookiecutter-aws_agentcore_runtime_basic/issues"
+Changelog = "https://github.com/MacHu-GWU/cookiecutter-aws_agentcore_runtime_basic/blob/main/release-history.rst"
 
 [tool.uv]
 # Only a virtual environment for the scripts; never build or install this repo.

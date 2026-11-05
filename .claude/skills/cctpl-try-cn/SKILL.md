@@ -17,8 +17,8 @@ Follow those docs to do the work.
 
 ## Steps
 
-1. **确定 preset.** 用户给了 preset 名就用它, 否则不带参数 (用 `cctpl/pair.py` 的 `TRIAL_PRESET`, 它为 `None` 时用默认值); 用户明确要默认值时传 `defaults`. 用户说的名字不在 `presets/*.json` 中时, 列出可用的 preset 并询问.
-2. **运行.** 从 tpl repo 根目录运行 `mise run try-template`, `mise run try-template defaults` 或 `mise run try-template <preset>`. 它耗时较长 (安装依赖, 构建文档), 耐心等待, 不要中途重试.
+1. **确定 preset.** 用户给了 preset 名就用它, 否则用默认值. 用户说的名字不在 `presets/*.json` 中时, 列出可用的 preset 并询问.
+2. **运行.** 从 tpl repo 根目录运行 `mise run try-template` 或 `mise run try-template <preset>`. 它耗时较长 (安装依赖, 构建文档), 耐心等待, 不要中途重试.
 3. **读结果.** 读取输出最后的 `=== Try result` 一节. 有失败时, 只看失败那一步的 `[try i/n]` 日志块 (日志文件路径在输出末尾), 按 09 判断问题出在 seed 内容还是参数化.
 
 ## Output

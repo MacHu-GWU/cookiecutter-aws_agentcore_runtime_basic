@@ -15,7 +15,7 @@ Follow those docs to do the work.
 
 ## Steps
 
-1. **确定版本号.** 版本号就是 seed `pyproject.toml` 中的共用版本号 (01 的 One Shared Version). 先运行 `mise run check-version`: 它失败时 (seed 版本号不合法, 或 seed changelog 没有这个版本的条目) 停下, 让用户先在 seed 中用 `pywf-priv-changelog-seed-repo` 处理. 不在 tpl repo 中改版本号.
+1. **确定版本号.** 版本号就是 seed `pyproject.toml` 中的共用版本号 (01 的 One Shared Version). 先运行 `mise run check-version`: 它失败时 (seed 版本号不合法, 或 seed changelog 没有这个版本的条目) 停下, 让用户先在 seed 中用 `pywf-oss-changelog-seed-repo` 处理. 不在 tpl repo 中改版本号.
 2. **拿到固定开头.** 运行 `mise run check-release`. 条目还没写或开头不对时, 它会在 `release-history.rst` 那一项打印 **预期的开头一行** (seed 链接). 原样使用这一行, 不手工拼接链接或锚点. 不写 seed commit: seed 的同名 tag 就是记录 (08 的 Seed Tag Record).
 3. **收集 tpl repo 自身的改动.** 基线是 tpl repo 的上一个 tag (`git describe --tags --abbrev=0`). 用只读 git 命令查看:
 

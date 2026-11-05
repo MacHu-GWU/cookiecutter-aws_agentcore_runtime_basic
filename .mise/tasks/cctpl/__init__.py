@@ -35,11 +35,9 @@ from .pair import (
     GITHUB_REPO,
     TEMPLATE_DIR_NAME,
     PYTHON_VERSION_VARIABLE,
-    TRIAL_PRESET,
     INSTALL_COMMAND,
     TEST_COMMAND,
     PROJECT_TASKS,
-    project_install_env,
 )
 
 # --- release (08-versioning-and-release.md)
@@ -271,16 +269,13 @@ def apply_preset(cookiecutter_json: dict, overrides: dict) -> dict:
 def run_project_tests(dir_project: Path, python: str) -> bool:
     """
     Create a uv virtual environment for a generated project, then run
-    ``INSTALL_COMMAND`` and ``TEST_COMMAND`` from ``pair.py``, with the extra
-    environment of ``project_install_env``, bypassing mise (06-verification.md,
-    "Secrets"). Return True on success.
+    ``INSTALL_COMMAND`` and ``TEST_COMMAND`` from ``pair.py``, bypassing mise (06-verification.md, "Secrets"). Return True on success.
     """
     env = {
         k: v
         for k, v in os.environ.items()
         if k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
     }
-    env.update(project_install_env(dir_project))
     steps = [
         ["uv", "venv", "--allow-existing", "--python", python],
         INSTALL_COMMAND,
@@ -293,25 +288,6 @@ def run_project_tests(dir_project: Path, python: str) -> bool:
             print(f"FAILED: '{' '.join(cmd)}' exited {res.returncode}")
             return False
     return True
-
-
-def build_wheel(dir_project: Path, python: str) -> bool:
-    """
-    Build a wheel of a generated project with uv, without installing its
-    dependencies. Return True on success.
-    """
-    env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
-    cmd = ["uv", "build", "--wheel", "--python", python]
-    print(f"$ {' '.join(cmd)}  (in {dir_project})", flush=True)
-    return subprocess.run(cmd, cwd=dir_project, env=env).returncode == 0
-
-
-def is_installable(preset: str | None) -> bool:
-    """
-    Whether a project rendered with ``preset`` (None: the cookiecutter.json
-    defaults) can install its dependencies, see ``TRIAL_PRESET`` in pair.py.
-    """
-    return TRIAL_PRESET is None or preset == TRIAL_PRESET
 
 
 class StepLog:

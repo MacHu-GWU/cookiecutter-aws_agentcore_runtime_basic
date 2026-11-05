@@ -20,7 +20,7 @@ flowchart TD
 | L1 Template Static Check | 模板中没有未声明的 seed value 残留 | `check-seed-values` | 漏掉的 seed value 形态, no_render 文件中的 seed value | 3 Sync |
 | L2 Generation | 用默认值能生成项目, 生成结果中没有未解析的变量 | `test-template`, `check-output` | Jinja 语法错误, hooks 报错, 引用了不存在的变量 | 3 Sync |
 | L3 Round Trip | 用 seed values 渲染模板, 结果与 seed 一致 | `check-roundtrip` | 派生形态计算结果与 seed 不同, Jinja 转义出错, 文件丢失或多出. **发现不了过度替换** (见 03 的 What Round Trip Cannot See) | 3 Sync |
-| L4 Generated Project Behavior | 能安装的那个生成项目 (默认值项目, 或 Trial Preset 项目, 见下文) 安装依赖, 测试通过; 其余生成的项目 (含 choice coverage) 都能构建 wheel | `test-output` | 默认值导致项目无法工作, 项目依赖了 seed 特有的东西, 某个可选值让打包失败 (例如不合法的 license 表达式) | 3 Sync (按需) |
+| L4 Generated Project Behavior | 用默认值生成的项目能安装依赖, 测试通过; choice coverage 生成的每个项目都能构建 wheel | `test-output` | 默认值导致项目无法工作, 项目依赖了 seed 特有的东西, 某个可选值让打包失败 (例如不合法的 license 表达式) | 3 Sync (按需) |
 | L5 Published Template | 从 GitHub 拉取的已发布模板与本地一致, 生成的项目能工作 | `verify-release` | 发布时漏拷贝文件, preset 分支内容错误 | 8 Verify |
 
 **seed 自己的测试不属于以上任何一层.** 它在阶段 2 Seed Self-Test 中运行, 保证的是参数化的素材本身是对的. 以上五层保证的是 "参数化和发布没有破坏它".
@@ -51,25 +51,12 @@ L4 需要为生成的项目安装完整依赖, 耗时长, 所以按需运行. �
 
 生成项目的 `mise.toml` 可能在 `[env]` 中通过命令从 secret 存储读取 token. 用默认值生成的项目, token 字段名是占位值, 读取一定失败. seed 的写法让读取失败时得到空字符串, 所以 mise 本身还能运行, 但每次加载配置都会执行一遍读取命令 (可能需要网络和外部工具).
 
-规则: **L4 不依赖任何 secret (Trial Preset 所需的私有 index 只读 token 除外, 见下文), 也不经过 mise.** 在生成的项目中直接调用工具链 (例如用 uv 安装, 直接运行 pytest; 具体命令是 `.mise/tasks/cctpl/pair.py` 的 `INSTALL_COMMAND` 和 `TEST_COMMAND`). 原因:
+规则: **L4 不依赖任何 secret, 也不经过 mise.** 在生成的项目中直接调用工具链 (例如用 uv 安装, 直接运行 pytest; 具体命令是 `.mise/tasks/cctpl/pair.py` 的 `INSTALL_COMMAND` 和 `TEST_COMMAND`). 原因:
 
 - L4 要回答的问题是 "生成的项目能不能安装, 测试能不能通过". 它的结果不应该取决于本机有没有 secret 存储, 网络是否可用.
 - 读取失败被静默转成空字符串, 如果 L4 经过 mise, secret 相关的问题既不会让 L4 失败, 也不会被报告, 只会让结果更难解释.
 
-经过 mise 的完整试用由 Local Trial 负责 (见下文). 需要真实 secret 才能验证的功能 (发布到 PyPI 或 CodeArtifact, 部署文档等) 不在 L4 的范围内, 它们由 seed 在真实环境中验证.
-
-### Trial Preset
-
-生成的项目如果从私有 index (例如 AWS CodeArtifact) 安装依赖, 用默认值生成的项目就无法安装: 默认值里的 index 地址, profile 都是占位值. 这时在 `.mise/tasks/cctpl/pair.py` 中把 `TRIAL_PRESET` 设为一个 preset 名: 用它的值生成的项目指向本机可以读取的真实 index. 依赖全部来自公开 index 的仓库对, `TRIAL_PRESET` 是 `None`, 下面的规则都不生效.
-
-`TRIAL_PRESET` 不为 `None` 时:
-
-- `test-template` 额外用它的值生成一个项目到 `tmp/cctpl/output/presets/<name>/`.
-- L4 安装并测试这个项目, 默认值项目和 choice coverage 项目只构建 wheel. L5 同理: 只有 `preset/<name>` 分支安装并测试, 其余分支只构建 wheel.
-- 安装命令 (`INSTALL_COMMAND`) 通过生成项目自己的脚本取得 index 的只读 token. 它需要的非 secret 配置 (profile, domain 等) 由 `pair.py` 的 `project_install_env()` 从生成项目的 `mise.toml` 中读出, 不经过 mise. token 只进入子进程的环境变量, 不打印.
-- 不带参数的 `try-template` (以及 `e2e`) 用这个 preset; 要用默认值时运行 `mise run try-template defaults`, 它通常在安装那一步失败.
-
-这是 "L4 不依赖 secret" 的唯一例外: 不读取私有 index, 生成的项目根本无法安装, L4 就失去了意义. 本机读不到这个 preset 的 index 时, L4 和 Local Trial 会在安装那一步失败, 这不是模板问题.
+经过 mise 的完整试用由 Local Trial 负责 (见下文). 需要真实 secret 才能验证的功能 (发布到 PyPI, 配置 Codecov 等) 不在 L4 的范围内, 它们由 seed 在真实环境中验证.
 
 
 ## Local Trial
@@ -82,8 +69,8 @@ L4 需要为生成的项目安装完整依赖, 耗时长, 所以按需运行. �
 | :--- | :--- | :--- |
 | 经过 mise | 否, 直接调用 uv 和 pytest | 是, 运行生成项目自己的 mise task |
 | 覆盖范围 | 依赖安装, 单元测试 | 生成项目的 `mise.toml`, 工具版本, task 脚本, 测试覆盖率, 文档构建 |
-| 渲染所用的值 | 默认值 (有 Trial Preset 时用它) | Trial Preset 或默认值, 或任意一个 preset |
-| 是否依赖 secret | 否 (有 Trial Preset 时读取私有 index 的只读 token) | preset 的 token 字段指向真实 secret 时会读取 (只进入环境变量, 不打印) |
+| 渲染所用的值 | 默认值 | 默认值, 或任意一个 preset |
+| 是否依赖 secret | 否 | preset 的 token 字段指向真实 secret 时会读取 (只进入环境变量, 不打印) |
 | 在流程中的位置 | Sync 阶段按需运行 | 任何时候, 尤其是 Review 前想亲眼看看效果时 |
 
 隔离规则:
@@ -100,12 +87,12 @@ L4 需要为生成的项目安装完整依赖, 耗时长, 所以按需运行. �
 人在本地测试模板的推荐顺序. 所有命令都在 tpl repo 根目录开始.
 
 1. **从 seed 重新生成并检查** (推荐, 但可省略): `mise run sync`. 它跑完 L1 – L3 并把 artifact 应用到 tpl repo, 之后 `git diff` 就能看到本次改动. 只想看效果, 不想动 artifact 时跳过这一步: 第 2 步自己会从 seed 重新生成模板.
-2. **生成项目并自动跑一圈**: `mise run try-template` (有 Trial Preset 时用它, 否则用默认值), `mise run try-template defaults` (默认值) 或 `mise run try-template <preset>`. 它从 seed 当前的工作区生成模板 (包括尚未 commit 的改动), 渲染项目, 并在项目中通过 mise 运行 `PROJECT_TASKS` 中的 task. 看最后的 `=== Try result`.
+2. **生成项目并自动跑一圈**: `mise run try-template` (默认值) 或 `mise run try-template <preset>`. 它从 seed 当前的工作区生成模板 (包括尚未 commit 的改动), 渲染项目, 并在项目中通过 mise 运行 `PROJECT_TASKS` 中的 task. 看最后的 `=== Try result`.
 3. **进入项目亲手看** (可选): 进入 `tmp/cctpl/try/<label>/<project>/`, 第一次先运行 `mise trust`, 然后运行任何想看的 task, 例如 `mise run view-cov`, `mise run view-doc` 在浏览器中查看覆盖率报告和文档, 或者重跑 `mise run cov`.
 
 seed 改了之后, 从第 1 步 (或第 2 步) 重新开始即可; 第 2 步每次都会清空并重建 `tmp/cctpl/try/<label>/`.
 
-第 1, 2 步可以用一条命令完成: `mise run e2e`, 它依次运行 `sync` 和不带参数的 `try-template`. 想试某个 preset 时, 在它之后再运行 `mise run try-template <preset>`.
+第 1, 2 步可以用一条命令完成: `mise run e2e`, 它依次运行 `sync` 和用默认值的 `try-template`. 想试某个 preset 时, 在它之后再运行 `mise run try-template <preset>`.
 
 
 ## L5: After Publish
@@ -116,7 +103,7 @@ L5 是阶段 8 Verify 的内容, 由 `verify-release` 完成, 在 forked context
 
 1. **拉取.** 用 `cookiecutter gh:<owner>/<repo> --checkout <branch> --no-input` 生成项目到 `tmp/cctpl/verify/<branch>/`. 确保拿到的是刚发布的版本, 而不是 cookiecutter 本地缓存的旧克隆.
 2. **与本地比较.** 用本地 `tmp/cctpl/template/` 和该分支的默认值 (`main` 用 `cookiecutter.json` 的默认值, `preset/<name>` 用 `presets/<name>.json` 覆盖后的默认值) 再生成一次, 两者必须逐字节一致. 不一致说明发布过程丢失或多出了文件 (例如 `cookiecutter.json` 没有随 template dir 一起更新), 或 preset 分支没有正确生成.
-3. **运行.** 按 L4 的方式安装依赖并运行测试. 有 Trial Preset 时, 只有它的分支这样做, 其余分支只构建 wheel.
+3. **运行.** 按 L4 的方式安装依赖并运行测试.
 
 ### Report
 

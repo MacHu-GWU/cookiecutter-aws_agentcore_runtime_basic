@@ -6,8 +6,6 @@ L2: generate projects from ``tmp/cctpl/template/`` into ``tmp/cctpl/output/``.
 - ``output/<project>/``: default values from ``cookiecutter.json``.
 - ``output/choices/<variable>-<value>/<project>/``: one generation per extra
   value of each variable in ``CHOICE_COVERAGE``, everything else default.
-- ``output/presets/<name>/<project>/``: the values of ``TRIAL_PRESET`` in
-  ``cctpl/pair.py``, when it is set: the one project test-output can install.
 
 Exits 1 if any generation fails.
 """
@@ -40,20 +38,6 @@ def main() -> int:
                     cctpl.dir_output / "choices" / f"{name}-{value}",
                 )
             )
-
-    if cctpl.TRIAL_PRESET:
-        presets = cctpl.load_presets()
-        if cctpl.TRIAL_PRESET not in presets:
-            raise cctpl.TaskError(
-                f"TRIAL_PRESET {cctpl.TRIAL_PRESET!r} in cctpl/pair.py has no presets/*.json"
-            )
-        runs.append(
-            (
-                f"preset {cctpl.TRIAL_PRESET}",
-                presets[cctpl.TRIAL_PRESET],
-                cctpl.dir_output / "presets" / cctpl.TRIAL_PRESET,
-            )
-        )
 
     failed = 0
     for label, context, dir_out in runs:

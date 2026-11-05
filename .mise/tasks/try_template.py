@@ -3,9 +3,8 @@
 """
 Local trial: try the template the way a human would.
 
-    mise run try-template                  # TRIAL_PRESET of cctpl/pair.py, or the defaults when it is None
-    mise run try-template defaults         # cookiecutter.json defaults
-    mise run try-template esc-sanhe-dev    # defaults overridden by presets/esc-sanhe-dev.json
+    mise run try-template            # cookiecutter.json defaults
+    mise run try-template sanhe      # defaults overridden by presets/sanhe.json
 
 1. Make the template from the seed's current working tree.
 2. Render one project with the chosen values into ``tmp/cctpl/try/<label>/``.
@@ -31,9 +30,7 @@ import cctpl
 
 
 def main() -> int:
-    preset = sys.argv[1] if len(sys.argv) > 1 else cctpl.TRIAL_PRESET
-    if preset == "defaults":
-        preset = None
+    preset = sys.argv[1] if len(sys.argv) > 1 else None
     presets = cctpl.load_presets()
     if preset and preset not in presets:
         raise cctpl.TaskError(

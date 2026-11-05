@@ -1,0 +1,10 @@
+// Copy to config/config-shared.json5. Values here are placeholders; only the shape matters.
+// Settings shared by every environment. Overridden by config-<env>.json5.
+{
+  // Every AWS resource name derives from this, such as the stack name prefix.
+  project_name: "my_project",
+  // The AgentCore CLI project name: a letter, then letters and digits, at most 23 characters.
+  agentcore_project_name: "MyProject",
+  // The Bedrock model (or cross-region inference profile) of the SiteAgent; override it per environment if needed.
+  site_agent_model_id: "us.amazon.nova-2-lite-v1:0",
+}

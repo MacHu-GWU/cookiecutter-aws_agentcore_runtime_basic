@@ -42,7 +42,7 @@ Follow those docs to do the work. 02 的 Where Facts Live 表是本 skill 的清
    - `CLAUDE.md`: 以本仓库的 `CLAUDE.md` 为骨架, 改写第一段 (这个模板生成什么样的项目), 清空 Current Status.
    - `pyproject.toml`: 只合并 `dependencies` 和 `[tool.uv]`. 名称, URL, 作者沿用目标的值. 版本号在第 4 步统一.
    - `.gitignore`: 确认其中忽略了 `tmp/`.
-   - **seed 一侧的 seed-only 文件** (02 的 seed repo): 把本仓库 seed 的 `.claude/skills/pywf-priv-changelog-seed-repo/` 拷贝到目标 seed, 第 4 步改写其中的 tpl repo 地址. 目标 seed 的 skill 前缀不是 `pywf-priv` 时, 按目标的前缀改名, 并同步修改 `make_template.py` 的 `EXCLUDE`.
+   - **seed 一侧的 seed-only 文件** (02 的 seed repo): 把本仓库 seed 的 `.claude/skills/pywf-oss-changelog-seed-repo/` 拷贝到目标 seed, 第 4 步改写其中的 tpl repo 地址. 目标 seed 的 skill 前缀不是 `pywf-oss` 时, 按目标的前缀改名, 并同步修改 `make_template.py` 的 `EXCLUDE`.
 4. **改写与本仓库对绑定的内容.** 按 02 的 Where Facts Live, 逐行处理 "fork 时" 为 "改写" 的项:
    - `mise.toml` 的 `CCTPL_SEED_DIR` 和 settings 的 `additionalDirectories`: 都改为指向目标 seed, 两者必须一致.
    - `.mise/tasks/cctpl/pair.py`, 逐个常量处理:
@@ -55,7 +55,7 @@ Follow those docs to do the work. 02 的 Where Facts Live 表是本 skill 的清
    - **统一版本号** (01 的 One Shared Version): 取目标 seed 和目标 tpl 两个版本号中较大的一个, 升一个 major (例如 `0.2.1` 和 `0.2.1` → `1.0.0`), 写入目标 seed 的 `pyproject.toml` 并在目标 seed 中运行它的安装 task 更新 lock 文件. 版本号先向用户确认. 目标 tpl 的版本号不手改, 第 7 步的 `sync` 会写入.
    - **seed changelog**: 在目标 seed 新建 `release-history-seed-repo.rst` (格式见 08 的 Changelogs), 第一个条目就是上面的新版本, 完整介绍目标 seed 当前的全部 feature, 并说明版本号为什么跳变. 目标 seed 的 `release-history.rst` 不动.
    - **tpl changelog**: 目标 tpl 的 `release-history.rst` 中已有的条目保持不变, 新版本的条目在目标第一次发布时用 `/cctpl-changelog-cn` 写.
-   - 拷贝过去的 `pywf-priv-changelog-seed-repo` 中的 tpl repo GitHub 地址, 改为目标 tpl repo 的地址.
+   - 拷贝过去的 `pywf-oss-changelog-seed-repo` 中的 tpl repo GitHub 地址, 改为目标 tpl repo 的地址.
      - 目标是 1.0 时: 迁移旧 `make_template.py` 中的 parameter. 再按 03 补齐 context 或 file scope, 补齐 `UNIQUE_SEED_VALUES`, `HOOK_OUTPUTS`, `CHOICE_COVERAGE` 等声明.
      - 目标是全新时: 分析目标 seed, 列出候选的 seed value (包名的各种形态, 作者, 邮箱, GitHub 用户名, secret 字段, 云资源名称等), 交给用户确认.
    - `presets/*.json`: 目标是 1.0, 并且有 preset 分支 (`main` 以外, 改过 `cookiecutter.json` 默认值的分支) 时, 用 `git show <branch>:cookiecutter.json` (只读) 读出每个分支的默认值, 与 `main` 比较, 把差异写成覆盖文件. 选择 preset 名时向用户确认.

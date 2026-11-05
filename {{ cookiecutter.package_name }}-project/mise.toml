@@ -1,0 +1,1385 @@
+# See claude code environment variables documents at https://code.claude.com/docs/en/settings
+[env]
+# A secret that cannot be read becomes an empty string, so mise still loads and tasks report it as not set.
+GITHUB_TOKEN = "{% raw %}{{{% endraw %} exec(command='uvx --from home-secret-toml hst get {{ cookiecutter.github_token_field }} || true') {% raw %}}}{% endraw %}"
+CODECOV_TOKEN = "{% raw %}{{{% endraw %} exec(command='uvx --from home-secret-toml hst get {{ cookiecutter.codecov_token_field }} || true') {% raw %}}}{% endraw %}"
+READTHEDOCS_TOKEN = "{% raw %}{{{% endraw %} exec(command='uvx --from home-secret-toml hst get {{ cookiecutter.readthedocs_token_field }} || true') {% raw %}}}{% endraw %}"
+# Make uv use the mise Python below (first ``python`` on PATH), not a uv-managed one
+# or a global ``~/.config/uv/.python-version`` pin. ``[tools] python`` is the one dev version.
+UV_PYTHON = "python"
+# Local, per-person settings; copy .env.example to .env (git-ignored) and fill in:
+# - ENV_NAME: the current environment (dev, tst, prd) of one.config / one.bsm; default dev.
+# - AWS_PROFILE_FOR_DEV, AWS_PROFILE_FOR_TST, AWS_PROFILE_FOR_PRD: the AWS CLI profile of
+#   each environment; one.bsm uses it locally, the generated cdk-* tasks pass it as
+#   --profile, the generated AgentCore tasks as AWS_PROFILE.
+_.file = ".env"
+
+[tools]
+python = "{{ cookiecutter.dev_python_version }}" # the dev Python; .readthedocs.yml reads it from here
+uv = "latest"
+claude = "latest"
+pandoc = "3.9" # Use pandoc 3.9 - latest stable major version as of 2026-04
+node = "24" # runtime of the cdk CLI and of aws-cdk-lib (jsii)
+awscli = "2.34.24"
+"npm:aws-cdk" = "2.1145.0" # the cdk CLI; must be new enough for the aws-cdk-lib in uv.lock
+"npm:@aws/agentcore" = "1.0.1" # the AgentCore CLI; deploys the agentcore/ project (Runtimes)
+
+# === Tasks ===
+# Python Environment Management
+[tasks.venv-create]
+description = "🐍 Create Python virtual environment using uv (creates .venv directory)"
+run = "uv venv --allow-existing"
+
+[tasks.venv-remove]
+description = "🗑️ Remove Python virtual environment (deletes .venv directory)"
+run = "rm -r .venv"
+
+# Dependency Management
+[tasks.inst]
+description = "💾 Install all Python dependencies using uv (syncs from pyproject.toml and uv.lock)"
+depends = ["venv-create"]
+run = "uv sync --all-extras --all-groups"
+
+[tasks.export]
+description = "📋 Export Python dependencies to requirements*.txt files using uv (for legacy compatibility)"
+run = """
+uv export --format requirements-txt --no-dev --no-emit-project --no-hashes --no-annotate --no-emit-package pywin32 --no-emit-package colorama --no-emit-package tzdata | sed 's/ ; platform_machine ==.*or.*//' > requirements.txt
+uv export --format requirements-txt --extra dev --no-emit-project --no-hashes --no-annotate --no-emit-package pywin32 --no-emit-package colorama --no-emit-package tzdata | sed 's/ ; platform_machine ==.*or.*//' > requirements-dev.txt
+uv export --format requirements-txt --extra test --no-emit-project --no-hashes --no-annotate --no-emit-package pywin32 --no-emit-package colorama --no-emit-package tzdata | sed 's/ ; platform_machine ==.*or.*//' > requirements-test.txt
+uv export --format requirements-txt --extra doc --no-emit-project --no-hashes --no-annotate --no-emit-package pywin32 --no-emit-package colorama --no-emit-package tzdata | sed 's/ ; platform_machine ==.*or.*//' > requirements-doc.txt
+uv export --format requirements-txt --extra mise --no-emit-project --no-hashes --no-annotate --no-emit-package pywin32 --no-emit-package colorama --no-emit-package tzdata | sed 's/ ; platform_machine ==.*or.*//' > requirements-mise.txt
+"""
+
+# Testing
+[tasks.test]
+description = "🧪 Run unit tests using pytest (scans test files automatically)"
+run = ".venv/bin/pytest tests"
+depends = ["inst"]
+
+[tasks.cov]
+description = "🧪📊 Run unit tests with code coverage using pytest (generates HTML report in htmlcov/)"
+run = ".venv/bin/pytest tests -s --tb=native --cov={{ cookiecutter.package_name }} --cov-report term-missing --cov-report html:htmlcov"
+depends = ["inst"]
+
+[tasks.int-test]
+description = "🧪☁️ Run integration tests against the stacks deployed in ENV_NAME (default dev), e.g. ENV_NAME=prd mise run int-test"
+run = ".venv/bin/pytest tests_int -s --tb=native"
+depends = ["inst"]
+
+[tasks.view-cov]
+description = "👀📊 Open code coverage HTML report in browser (requires 'cov' task to run first)"
+run = "open htmlcov/index.html"
+
+# Code Quality
+[tasks.format]
+description = "🎨 Format all Python code with ruff (package, tests, CDK app, mise task scripts, skill scripts)"
+run = "uvx ruff format {{ cookiecutter.package_name }} tests tests_int cdk .mise/tasks .claude/skills/pywf-oss-base .claude/skills/aws-agentcore-base"
+
+[tasks.lint]
+description = "🔍 Lint Python code with ruff (unused/undefined names) and check one imported name per statement"
+run = """
+uvx ruff check --select F401,F821,F841 {{ cookiecutter.package_name }} tests tests_int cdk .mise/tasks .claude/skills/pywf-oss-base .claude/skills/aws-agentcore-base
+python3 .claude/skills/pywf-oss-base/scripts/check_one_import_per_line.py --paths {{ cookiecutter.package_name }} tests tests_int cdk .mise/tasks .claude/skills/pywf-oss-base .claude/skills/aws-agentcore-base
+"""
+
+# AgentCore, local (no AWS). The per-runtime tasks ac-local-<slug>, ac-dev-<slug>, and
+# ac-local-<slug>-call are generated (gen-env-tasks), with each runtime's local port.
+[tasks.free-port]
+description = "🧹 Stop this repo's leftover server on a port: mise run free-port --port <port> (never stops a process outside this repo)"
+run = ".venv/bin/python .mise/tasks/free-port.py"
+
+# AgentCore CLI project (agentcore/); every task deploys or builds ALL runtimes of the project
+[tasks.ac-gen]
+description = "🏗️ Generate agentcore/agentcore.json, agentcore/aws-targets.json (for ENV_NAME, default dev), and app/<Runtime>/ from the config, uv.lock, and the package"
+run = ".venv/bin/python .mise/tasks/ac-gen.py"
+depends = ["inst"]
+
+[tasks.ac-check-wheels]
+description = "🏗️ Check every runtime's dependencies install as agentcore deploy installs them: wheels only, Linux aarch64 (dry run, no AWS call)"
+run = ".venv/bin/python .mise/tasks/ac-check-wheels.py"
+depends = ["ac-gen"]
+
+[tasks.ac-build]
+description = "🏗️ Build every runtime's CodeZip and synth the AgentCore stack of each target (no AWS calls)"
+run = "agentcore build"
+depends = ["ac-gen"]
+
+[tasks.ac-check-layout]
+description = "🔎 Compare agentcore/cdk/ with a fresh `agentcore create` of the installed AgentCore CLI (run after upgrading the CLI; no AWS call)"
+run = ".venv/bin/python .claude/skills/aws-agentcore-base/scripts/check_cdk_layout.py"
+
+# Documentation
+[tasks.build-doc]
+description = "📚 Build Sphinx documentation using sphinx-build (generates HTML in docs/build/html/)"
+depends = ["inst"]
+run = """
+rm -rf docs/build
+.venv/bin/sphinx-build -b html docs/source docs/build/html
+"""
+
+[tasks.view-doc]
+description = "👀📚 Open built Sphinx documentation in browser (requires 'build-doc' task to run first)"
+run = "open docs/build/html/index.html"
+
+[tasks.notebook-to-markdown]
+description = "📓 Convert Jupyter notebooks to Markdown for AI knowledge base (processes .ipynb files)"
+run = ".venv/bin/python .mise/tasks/notebook-to-markdown.py"
+depends = ["inst"]
+
+# Building & Release
+[tasks.build]
+description = "🏗️ Build Python package wheel and source distribution using uv (outputs to dist/)"
+run = """
+rm -rf dist
+uv build
+"""
+
+[tasks.release]
+description = "🏷 Create GitHub release using PyGithub (idempotent: skips if release exists)"
+run = ".venv/bin/python .mise/tasks/release.py"
+depends = ["inst"]
+
+# CI/CD Setup
+[tasks.setup-codecov]
+description = "⚙️ Setup Codecov upload token on GitHub Actions secrets using PyGithub and httpx2"
+run = ".venv/bin/python .mise/tasks/setup-codecov.py"
+depends = ["inst"]
+
+[tasks.setup-readthedocs]
+description = "⚙️ Setup ReadTheDocs project and GitHub webhook using httpx2 API client"
+run = ".venv/bin/python .mise/tasks/setup-readthedocs.py"
+depends = ["inst"]
+
+[tasks.update-github-metadata]
+description = "🔧 Update GitHub repository description and homepage using PyGithub"
+run = ".venv/bin/python .mise/tasks/update-github-metadata.py"
+depends = ["inst"]
+
+# Per-environment tasks (config, AgentCore deploy, CDK)
+[tasks.gen-env-tasks]
+description = "🧩 Regenerate every per-environment task (config-*, ac-*, cdk-*) and per-runtime task (ac-local-*, ac-dev-*) below from EnvNameEnum, StackCtxEnum, and the runtime registry (rewrites the <env-tasks> block)"
+run = ".venv/bin/python .mise/tasks/gen-env-tasks.py"
+depends = ["inst"]
+
+[tasks.gen-quick-links]
+description = "🔗 Regenerate QUICK_LINKS.md, the console of every AWS resource in every environment: stacks and config from config/, runtimes, their roles and logs looked up in AWS (read only) with each environment's profile"
+run = ".venv/bin/python .mise/tasks/gen-quick-links.py"
+depends = ["inst"]
+
+[tasks.print-cdk-stack-urls]
+description = "🔗 Print the CloudFormation console URL of every stack in every environment (no AWS call; a failing environment prints an error, the rest still print)"
+run = ".venv/bin/python .mise/tasks/print-cdk-stack-urls.py"
+depends = ["inst"]
+
+# <env-tasks>
+# Generated by `mise run gen-env-tasks`. Do not edit by hand.
+
+[tasks."config-deploy-dev"]
+description = "⚙️ Deploy the config of dev to SSM Parameter Store, if it changed (writes to AWS)"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> config-deploy-dev: Deploy the config of dev to SSM Parameter Store, if it changed (writes to AWS)'
+.venv/bin/python .mise/tasks/config-deploy.py
+"""
+
+[tasks."config-delete-dev"]
+description = "🗑️ Delete the config of dev from SSM Parameter Store (writes to AWS)"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> config-delete-dev: Delete the config of dev from SSM Parameter Store (writes to AWS)'
+.venv/bin/python .mise/tasks/confirm.py --action 'Delete the config parameter of dev?' --skip_var CONFIRM_YES --skip_var CONFIRMED_BY_CHAIN
+.venv/bin/python .mise/tasks/config-delete.py
+"""
+
+[tasks."ac-deploy-dev"]
+description = "🚀 Deploy every AgentCore runtime to the dev target: check that the agentcore-deps policy and the config exist, generate the project for dev, check the wheels, deploy (writes to AWS)"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> ac-deploy-dev: Deploy every AgentCore runtime to the dev target: check that the agentcore-deps policy and the config exist, generate the project for dev, check the wheels, deploy (writes to AWS)'
+echo '--- CloudFormation console ---'
+echo 'AgentCore stack: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText=AgentCore-{{ cookiecutter.agentcore_project_name }}-dev&filteringStatus=active&viewNested=true'
+.venv/bin/python .mise/tasks/ac-check-deps.py
+.venv/bin/python .mise/tasks/ac-gen.py
+.venv/bin/python .mise/tasks/ac-check-wheels.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore deploy --target dev'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore deploy --target dev
+echo 'Commit agentcore/.cli/deployed-state.json if it changed: everyone who deploys shares it'
+"""
+
+[tasks."ac-down-dev"]
+description = "🔴 Destroy every AgentCore runtime of the dev target: deploy an empty project with --yes, then generate the real one again, even if the deploy fails (writes to AWS; keeps the agentcore-deps stack and the config)"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> ac-down-dev: Destroy every AgentCore runtime of the dev target: deploy an empty project with --yes, then generate the real one again, even if the deploy fails (writes to AWS; keeps the agentcore-deps stack and the config)'
+.venv/bin/python .mise/tasks/confirm.py --action 'Destroy every AgentCore runtime of dev?' --skip_var CONFIRM_YES --skip_var CONFIRMED_BY_CHAIN
+echo '--- CloudFormation console ---'
+echo 'AgentCore stack: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText=AgentCore-{{ cookiecutter.agentcore_project_name }}-dev&filteringStatus=active&viewNested=true'
+.venv/bin/python .mise/tasks/ac-gen-teardown.py
+trap '.venv/bin/python .mise/tasks/ac-gen.py' EXIT
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore deploy --target dev --yes'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore deploy --target dev --yes
+echo 'Commit agentcore/.cli/deployed-state.json if it changed: everyone who deploys shares it'
+"""
+
+[tasks."ac-status-dev"]
+description = "🔎 Show the deployed AgentCore runtimes of the dev target (reads AWS)"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> ac-status-dev: Show the deployed AgentCore runtimes of the dev target (reads AWS)'
+echo '--- CloudFormation console ---'
+echo 'AgentCore stack: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText=AgentCore-{{ cookiecutter.agentcore_project_name }}-dev&filteringStatus=active&viewNested=true'
+.venv/bin/python .mise/tasks/ac-gen.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore status --target dev'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore status --target dev
+"""
+
+[tasks."ac-invoke-dev-power-plant-mcp"]
+description = "🤖 Invoke the deployed PowerPlantMcp of dev with its sample payload; SESSION_ID=<id> continues a session (calls AWS)"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> ac-invoke-dev-power-plant-mcp: Invoke the deployed PowerPlantMcp of dev with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+PAYLOAD='{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_site", "arguments": {"site_id": "S-03"{% raw %}}}{% endraw %}}'
+echo '--- Run command ---'
+echo "AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore invoke --target dev --runtime PowerPlantMcp --mcp-method tools/call --mcp-name get_site --payload '$PAYLOAD' ${SESSION_ID:+--session-id $SESSION_ID}"
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore invoke --target dev --runtime PowerPlantMcp --mcp-method tools/call --mcp-name get_site --payload "$PAYLOAD" ${SESSION_ID:+--session-id $SESSION_ID}
+"""
+
+[tasks."ac-invoke-dev-site-agent"]
+description = "🤖 Invoke the deployed SiteAgent of dev with its sample payload; SESSION_ID=<id> continues a session (calls AWS)"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> ac-invoke-dev-site-agent: Invoke the deployed SiteAgent of dev with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+PAYLOAD='{"prompt": "Can we send someone to inspect the turbines at site S-03 tomorrow? Who is assigned there?"}'
+echo '--- Run command ---'
+echo "AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore invoke --target dev --runtime SiteAgent --payload '$PAYLOAD' ${SESSION_ID:+--session-id $SESSION_ID}"
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore invoke --target dev --runtime SiteAgent --payload "$PAYLOAD" ${SESSION_ID:+--session-id $SESSION_ID}
+"""
+
+[tasks."ac-logs-dev-power-plant-mcp"]
+description = "📜 Show the recent logs of the deployed PowerPlantMcp of dev; SINCE=2h looks further back (reads AWS)"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> ac-logs-dev-power-plant-mcp: Show the recent logs of the deployed PowerPlantMcp of dev; SINCE=2h looks further back (reads AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore logs runtime --name PowerPlantMcp --target dev --since ${SINCE:-30m}'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore logs runtime --name PowerPlantMcp --target dev --since ${SINCE:-30m}
+"""
+
+[tasks."ac-logs-dev-site-agent"]
+description = "📜 Show the recent logs of the deployed SiteAgent of dev; SINCE=2h looks further back (reads AWS)"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> ac-logs-dev-site-agent: Show the recent logs of the deployed SiteAgent of dev; SINCE=2h looks further back (reads AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore logs runtime --name SiteAgent --target dev --since ${SINCE:-30m}'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %} agentcore logs runtime --name SiteAgent --target dev --since ${SINCE:-30m}
+"""
+
+[tasks."ac-chain-up-dev"]
+description = "🚀 Deploy everything AgentCore of dev: config-deploy-dev → cdk-up-dev-agentcore-deps-stack → ac-deploy-dev"
+run = [
+    "echo '=== ac-chain-up-dev: Deploy everything AgentCore of dev, in this order ==='",
+    "echo '  1. config-deploy-dev: Deploy the config of dev to SSM Parameter Store, if it changed (writes to AWS)'",
+    "echo '  2. cdk-up-dev-agentcore-deps-stack: Deploy stack agentcore-deps of dev (no approval prompt)'",
+    "echo '  3. ac-deploy-dev: Deploy every AgentCore runtime to the dev target: check that the agentcore-deps policy and the config exist, generate the project for dev, check the wheels, deploy (writes to AWS)'",
+    { task = "config-deploy-dev" },
+    { task = "cdk-up-dev-agentcore-deps-stack" },
+    { task = "ac-deploy-dev" },
+    "echo '=== ac-chain-up-dev: done ==='",
+]
+
+[tasks."ac-chain-down-dev"]
+description = "🔴 Destroy everything AgentCore of dev: ac-down-dev → cdk-down-dev-agentcore-deps-stack → config-delete-dev"
+env = { CONFIRMED_BY_CHAIN = "true" }
+run = [
+    "echo '=== ac-chain-down-dev: Destroy everything AgentCore of dev, in this order ==='",
+    "echo '  1. ac-down-dev: Destroy every AgentCore runtime of the dev target: deploy an empty project with --yes, then generate the real one again, even if the deploy fails (writes to AWS; keeps the agentcore-deps stack and the config)'",
+    "echo '  2. cdk-down-dev-agentcore-deps-stack: Destroy stack agentcore-deps of dev (force, no confirmation)'",
+    "echo '  3. config-delete-dev: Delete the config of dev from SSM Parameter Store (writes to AWS)'",
+    ".venv/bin/python .mise/tasks/confirm.py --action 'Destroy the AgentCore runtimes, the agentcore-deps stack, and the config of dev?' --skip_var CONFIRM_YES",
+    { task = "ac-down-dev" },
+    { task = "cdk-down-dev-agentcore-deps-stack" },
+    { task = "config-delete-dev" },
+    "echo '=== ac-chain-down-dev: done ==='",
+]
+
+[tasks."ac-test-dev"]
+description = "🧪 Test the deployed AgentCore runtimes of dev: ac-status-dev → ac-invoke-dev-power-plant-mcp → ac-invoke-dev-site-agent"
+run = [
+    "echo '=== ac-test-dev: Test the deployed AgentCore runtimes of dev, in this order ==='",
+    "echo '  1. ac-status-dev: Show the deployed AgentCore runtimes of the dev target (reads AWS)'",
+    "echo '  2. ac-invoke-dev-power-plant-mcp: Invoke the deployed PowerPlantMcp of dev with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'",
+    "echo '  3. ac-invoke-dev-site-agent: Invoke the deployed SiteAgent of dev with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'",
+    { task = "ac-status-dev" },
+    { task = "ac-invoke-dev-power-plant-mcp" },
+    { task = "ac-invoke-dev-site-agent" },
+    "echo '=== ac-test-dev: done ==='",
+]
+
+[tasks."cdk-synth-dev-all"]
+description = "⚪ Synthesize all stacks of dev to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-dev-all: Synthesize all stacks of dev to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-dev-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-dev-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth'
+cdk synth
+"""
+
+[tasks."cdk-plan-dev-all"]
+description = "🔵 Plan all stacks of dev: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-dev-all: Plan all stacks of dev: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-dev-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-dev-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff --all --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk diff --all --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-dev-all"]
+description = "🟢 Deploy all stacks of dev (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-dev-all: Deploy all stacks of dev (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-dev-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-dev-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy --all --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk deploy --all --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-dev-all"]
+description = "🔴 Destroy all stacks of dev (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-dev-all: Destroy all stacks of dev (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-dev-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-dev-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy --all --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk destroy --all --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-synth-dev-alerts-stack"]
+description = "⚪ Synthesize stack alerts of dev to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-dev-alerts-stack: Synthesize stack alerts of dev to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth {{ cookiecutter.package_name | slugify }}-dev-alerts --exclusively'
+cdk synth {{ cookiecutter.package_name | slugify }}-dev-alerts --exclusively
+"""
+
+[tasks."cdk-plan-dev-alerts-stack"]
+description = "🔵 Plan stack alerts of dev: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-dev-alerts-stack: Plan stack alerts of dev: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff {{ cookiecutter.package_name | slugify }}-dev-alerts --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk diff {{ cookiecutter.package_name | slugify }}-dev-alerts --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-dev-alerts-stack"]
+description = "🟢 Deploy stack alerts of dev (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-dev-alerts-stack: Deploy stack alerts of dev (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy {{ cookiecutter.package_name | slugify }}-dev-alerts --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk deploy {{ cookiecutter.package_name | slugify }}-dev-alerts --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-dev-alerts-stack"]
+description = "🔴 Destroy stack alerts of dev (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-dev-alerts-stack: Destroy stack alerts of dev (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy {{ cookiecutter.package_name | slugify }}-dev-alerts --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk destroy {{ cookiecutter.package_name | slugify }}-dev-alerts --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-synth-dev-publisher-stack"]
+description = "⚪ Synthesize stack publisher of dev to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-dev-publisher-stack: Synthesize stack publisher of dev to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth {{ cookiecutter.package_name | slugify }}-dev-publisher --exclusively'
+cdk synth {{ cookiecutter.package_name | slugify }}-dev-publisher --exclusively
+"""
+
+[tasks."cdk-plan-dev-publisher-stack"]
+description = "🔵 Plan stack publisher of dev: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-dev-publisher-stack: Plan stack publisher of dev: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff {{ cookiecutter.package_name | slugify }}-dev-publisher --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk diff {{ cookiecutter.package_name | slugify }}-dev-publisher --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-dev-publisher-stack"]
+description = "🟢 Deploy stack publisher of dev (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-dev-publisher-stack: Deploy stack publisher of dev (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy {{ cookiecutter.package_name | slugify }}-dev-publisher --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk deploy {{ cookiecutter.package_name | slugify }}-dev-publisher --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-dev-publisher-stack"]
+description = "🔴 Destroy stack publisher of dev (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-dev-publisher-stack: Destroy stack publisher of dev (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy {{ cookiecutter.package_name | slugify }}-dev-publisher --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk destroy {{ cookiecutter.package_name | slugify }}-dev-publisher --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-synth-dev-agentcore-deps-stack"]
+description = "⚪ Synthesize stack agentcore-deps of dev to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-dev-agentcore-deps-stack: Synthesize stack agentcore-deps of dev to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth {{ cookiecutter.package_name | slugify }}-dev-agentcore-deps --exclusively'
+cdk synth {{ cookiecutter.package_name | slugify }}-dev-agentcore-deps --exclusively
+"""
+
+[tasks."cdk-plan-dev-agentcore-deps-stack"]
+description = "🔵 Plan stack agentcore-deps of dev: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-dev-agentcore-deps-stack: Plan stack agentcore-deps of dev: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff {{ cookiecutter.package_name | slugify }}-dev-agentcore-deps --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk diff {{ cookiecutter.package_name | slugify }}-dev-agentcore-deps --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-dev-agentcore-deps-stack"]
+description = "🟢 Deploy stack agentcore-deps of dev (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-dev-agentcore-deps-stack: Deploy stack agentcore-deps of dev (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy {{ cookiecutter.package_name | slugify }}-dev-agentcore-deps --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk deploy {{ cookiecutter.package_name | slugify }}-dev-agentcore-deps --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-dev-agentcore-deps-stack"]
+description = "🔴 Destroy stack agentcore-deps of dev (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "dev" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-dev-agentcore-deps-stack: Destroy stack agentcore-deps of dev (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-dev-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-dev-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy {{ cookiecutter.package_name | slugify }}-dev-agentcore-deps --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}'
+cdk destroy {{ cookiecutter.package_name | slugify }}-dev-agentcore-deps --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_DEV{% raw %}}}{% endraw %}
+"""
+
+[tasks."config-deploy-tst"]
+description = "⚙️ Deploy the config of tst to SSM Parameter Store, if it changed (writes to AWS)"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> config-deploy-tst: Deploy the config of tst to SSM Parameter Store, if it changed (writes to AWS)'
+.venv/bin/python .mise/tasks/config-deploy.py
+"""
+
+[tasks."config-delete-tst"]
+description = "🗑️ Delete the config of tst from SSM Parameter Store (writes to AWS)"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> config-delete-tst: Delete the config of tst from SSM Parameter Store (writes to AWS)'
+.venv/bin/python .mise/tasks/confirm.py --action 'Delete the config parameter of tst?' --skip_var CONFIRM_YES --skip_var CONFIRMED_BY_CHAIN
+.venv/bin/python .mise/tasks/config-delete.py
+"""
+
+[tasks."ac-deploy-tst"]
+description = "🚀 Deploy every AgentCore runtime to the tst target: check that the agentcore-deps policy and the config exist, generate the project for tst, check the wheels, deploy (writes to AWS)"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> ac-deploy-tst: Deploy every AgentCore runtime to the tst target: check that the agentcore-deps policy and the config exist, generate the project for tst, check the wheels, deploy (writes to AWS)'
+echo '--- CloudFormation console ---'
+echo 'AgentCore stack: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText=AgentCore-{{ cookiecutter.agentcore_project_name }}-tst&filteringStatus=active&viewNested=true'
+.venv/bin/python .mise/tasks/ac-check-deps.py
+.venv/bin/python .mise/tasks/ac-gen.py
+.venv/bin/python .mise/tasks/ac-check-wheels.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore deploy --target tst'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore deploy --target tst
+echo 'Commit agentcore/.cli/deployed-state.json if it changed: everyone who deploys shares it'
+"""
+
+[tasks."ac-down-tst"]
+description = "🔴 Destroy every AgentCore runtime of the tst target: deploy an empty project with --yes, then generate the real one again, even if the deploy fails (writes to AWS; keeps the agentcore-deps stack and the config)"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> ac-down-tst: Destroy every AgentCore runtime of the tst target: deploy an empty project with --yes, then generate the real one again, even if the deploy fails (writes to AWS; keeps the agentcore-deps stack and the config)'
+.venv/bin/python .mise/tasks/confirm.py --action 'Destroy every AgentCore runtime of tst?' --skip_var CONFIRM_YES --skip_var CONFIRMED_BY_CHAIN
+echo '--- CloudFormation console ---'
+echo 'AgentCore stack: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText=AgentCore-{{ cookiecutter.agentcore_project_name }}-tst&filteringStatus=active&viewNested=true'
+.venv/bin/python .mise/tasks/ac-gen-teardown.py
+trap '.venv/bin/python .mise/tasks/ac-gen.py' EXIT
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore deploy --target tst --yes'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore deploy --target tst --yes
+echo 'Commit agentcore/.cli/deployed-state.json if it changed: everyone who deploys shares it'
+"""
+
+[tasks."ac-status-tst"]
+description = "🔎 Show the deployed AgentCore runtimes of the tst target (reads AWS)"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> ac-status-tst: Show the deployed AgentCore runtimes of the tst target (reads AWS)'
+echo '--- CloudFormation console ---'
+echo 'AgentCore stack: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText=AgentCore-{{ cookiecutter.agentcore_project_name }}-tst&filteringStatus=active&viewNested=true'
+.venv/bin/python .mise/tasks/ac-gen.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore status --target tst'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore status --target tst
+"""
+
+[tasks."ac-invoke-tst-power-plant-mcp"]
+description = "🤖 Invoke the deployed PowerPlantMcp of tst with its sample payload; SESSION_ID=<id> continues a session (calls AWS)"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> ac-invoke-tst-power-plant-mcp: Invoke the deployed PowerPlantMcp of tst with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+PAYLOAD='{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_site", "arguments": {"site_id": "S-03"{% raw %}}}{% endraw %}}'
+echo '--- Run command ---'
+echo "AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore invoke --target tst --runtime PowerPlantMcp --mcp-method tools/call --mcp-name get_site --payload '$PAYLOAD' ${SESSION_ID:+--session-id $SESSION_ID}"
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore invoke --target tst --runtime PowerPlantMcp --mcp-method tools/call --mcp-name get_site --payload "$PAYLOAD" ${SESSION_ID:+--session-id $SESSION_ID}
+"""
+
+[tasks."ac-invoke-tst-site-agent"]
+description = "🤖 Invoke the deployed SiteAgent of tst with its sample payload; SESSION_ID=<id> continues a session (calls AWS)"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> ac-invoke-tst-site-agent: Invoke the deployed SiteAgent of tst with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+PAYLOAD='{"prompt": "Can we send someone to inspect the turbines at site S-03 tomorrow? Who is assigned there?"}'
+echo '--- Run command ---'
+echo "AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore invoke --target tst --runtime SiteAgent --payload '$PAYLOAD' ${SESSION_ID:+--session-id $SESSION_ID}"
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore invoke --target tst --runtime SiteAgent --payload "$PAYLOAD" ${SESSION_ID:+--session-id $SESSION_ID}
+"""
+
+[tasks."ac-logs-tst-power-plant-mcp"]
+description = "📜 Show the recent logs of the deployed PowerPlantMcp of tst; SINCE=2h looks further back (reads AWS)"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> ac-logs-tst-power-plant-mcp: Show the recent logs of the deployed PowerPlantMcp of tst; SINCE=2h looks further back (reads AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore logs runtime --name PowerPlantMcp --target tst --since ${SINCE:-30m}'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore logs runtime --name PowerPlantMcp --target tst --since ${SINCE:-30m}
+"""
+
+[tasks."ac-logs-tst-site-agent"]
+description = "📜 Show the recent logs of the deployed SiteAgent of tst; SINCE=2h looks further back (reads AWS)"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> ac-logs-tst-site-agent: Show the recent logs of the deployed SiteAgent of tst; SINCE=2h looks further back (reads AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore logs runtime --name SiteAgent --target tst --since ${SINCE:-30m}'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %} agentcore logs runtime --name SiteAgent --target tst --since ${SINCE:-30m}
+"""
+
+[tasks."ac-chain-up-tst"]
+description = "🚀 Deploy everything AgentCore of tst: config-deploy-tst → cdk-up-tst-agentcore-deps-stack → ac-deploy-tst"
+run = [
+    "echo '=== ac-chain-up-tst: Deploy everything AgentCore of tst, in this order ==='",
+    "echo '  1. config-deploy-tst: Deploy the config of tst to SSM Parameter Store, if it changed (writes to AWS)'",
+    "echo '  2. cdk-up-tst-agentcore-deps-stack: Deploy stack agentcore-deps of tst (no approval prompt)'",
+    "echo '  3. ac-deploy-tst: Deploy every AgentCore runtime to the tst target: check that the agentcore-deps policy and the config exist, generate the project for tst, check the wheels, deploy (writes to AWS)'",
+    { task = "config-deploy-tst" },
+    { task = "cdk-up-tst-agentcore-deps-stack" },
+    { task = "ac-deploy-tst" },
+    "echo '=== ac-chain-up-tst: done ==='",
+]
+
+[tasks."ac-chain-down-tst"]
+description = "🔴 Destroy everything AgentCore of tst: ac-down-tst → cdk-down-tst-agentcore-deps-stack → config-delete-tst"
+env = { CONFIRMED_BY_CHAIN = "true" }
+run = [
+    "echo '=== ac-chain-down-tst: Destroy everything AgentCore of tst, in this order ==='",
+    "echo '  1. ac-down-tst: Destroy every AgentCore runtime of the tst target: deploy an empty project with --yes, then generate the real one again, even if the deploy fails (writes to AWS; keeps the agentcore-deps stack and the config)'",
+    "echo '  2. cdk-down-tst-agentcore-deps-stack: Destroy stack agentcore-deps of tst (force, no confirmation)'",
+    "echo '  3. config-delete-tst: Delete the config of tst from SSM Parameter Store (writes to AWS)'",
+    ".venv/bin/python .mise/tasks/confirm.py --action 'Destroy the AgentCore runtimes, the agentcore-deps stack, and the config of tst?' --skip_var CONFIRM_YES",
+    { task = "ac-down-tst" },
+    { task = "cdk-down-tst-agentcore-deps-stack" },
+    { task = "config-delete-tst" },
+    "echo '=== ac-chain-down-tst: done ==='",
+]
+
+[tasks."ac-test-tst"]
+description = "🧪 Test the deployed AgentCore runtimes of tst: ac-status-tst → ac-invoke-tst-power-plant-mcp → ac-invoke-tst-site-agent"
+run = [
+    "echo '=== ac-test-tst: Test the deployed AgentCore runtimes of tst, in this order ==='",
+    "echo '  1. ac-status-tst: Show the deployed AgentCore runtimes of the tst target (reads AWS)'",
+    "echo '  2. ac-invoke-tst-power-plant-mcp: Invoke the deployed PowerPlantMcp of tst with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'",
+    "echo '  3. ac-invoke-tst-site-agent: Invoke the deployed SiteAgent of tst with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'",
+    { task = "ac-status-tst" },
+    { task = "ac-invoke-tst-power-plant-mcp" },
+    { task = "ac-invoke-tst-site-agent" },
+    "echo '=== ac-test-tst: done ==='",
+]
+
+[tasks."cdk-synth-tst-all"]
+description = "⚪ Synthesize all stacks of tst to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-tst-all: Synthesize all stacks of tst to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-tst-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-tst-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth'
+cdk synth
+"""
+
+[tasks."cdk-plan-tst-all"]
+description = "🔵 Plan all stacks of tst: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-tst-all: Plan all stacks of tst: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-tst-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-tst-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff --all --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk diff --all --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-tst-all"]
+description = "🟢 Deploy all stacks of tst (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-tst-all: Deploy all stacks of tst (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-tst-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-tst-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy --all --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk deploy --all --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-tst-all"]
+description = "🔴 Destroy all stacks of tst (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-tst-all: Destroy all stacks of tst (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-tst-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-tst-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy --all --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk destroy --all --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-synth-tst-alerts-stack"]
+description = "⚪ Synthesize stack alerts of tst to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-tst-alerts-stack: Synthesize stack alerts of tst to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth {{ cookiecutter.package_name | slugify }}-tst-alerts --exclusively'
+cdk synth {{ cookiecutter.package_name | slugify }}-tst-alerts --exclusively
+"""
+
+[tasks."cdk-plan-tst-alerts-stack"]
+description = "🔵 Plan stack alerts of tst: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-tst-alerts-stack: Plan stack alerts of tst: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff {{ cookiecutter.package_name | slugify }}-tst-alerts --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk diff {{ cookiecutter.package_name | slugify }}-tst-alerts --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-tst-alerts-stack"]
+description = "🟢 Deploy stack alerts of tst (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-tst-alerts-stack: Deploy stack alerts of tst (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy {{ cookiecutter.package_name | slugify }}-tst-alerts --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk deploy {{ cookiecutter.package_name | slugify }}-tst-alerts --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-tst-alerts-stack"]
+description = "🔴 Destroy stack alerts of tst (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-tst-alerts-stack: Destroy stack alerts of tst (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy {{ cookiecutter.package_name | slugify }}-tst-alerts --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk destroy {{ cookiecutter.package_name | slugify }}-tst-alerts --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-synth-tst-publisher-stack"]
+description = "⚪ Synthesize stack publisher of tst to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-tst-publisher-stack: Synthesize stack publisher of tst to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth {{ cookiecutter.package_name | slugify }}-tst-publisher --exclusively'
+cdk synth {{ cookiecutter.package_name | slugify }}-tst-publisher --exclusively
+"""
+
+[tasks."cdk-plan-tst-publisher-stack"]
+description = "🔵 Plan stack publisher of tst: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-tst-publisher-stack: Plan stack publisher of tst: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff {{ cookiecutter.package_name | slugify }}-tst-publisher --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk diff {{ cookiecutter.package_name | slugify }}-tst-publisher --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-tst-publisher-stack"]
+description = "🟢 Deploy stack publisher of tst (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-tst-publisher-stack: Deploy stack publisher of tst (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy {{ cookiecutter.package_name | slugify }}-tst-publisher --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk deploy {{ cookiecutter.package_name | slugify }}-tst-publisher --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-tst-publisher-stack"]
+description = "🔴 Destroy stack publisher of tst (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-tst-publisher-stack: Destroy stack publisher of tst (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy {{ cookiecutter.package_name | slugify }}-tst-publisher --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk destroy {{ cookiecutter.package_name | slugify }}-tst-publisher --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-synth-tst-agentcore-deps-stack"]
+description = "⚪ Synthesize stack agentcore-deps of tst to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-tst-agentcore-deps-stack: Synthesize stack agentcore-deps of tst to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth {{ cookiecutter.package_name | slugify }}-tst-agentcore-deps --exclusively'
+cdk synth {{ cookiecutter.package_name | slugify }}-tst-agentcore-deps --exclusively
+"""
+
+[tasks."cdk-plan-tst-agentcore-deps-stack"]
+description = "🔵 Plan stack agentcore-deps of tst: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-tst-agentcore-deps-stack: Plan stack agentcore-deps of tst: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff {{ cookiecutter.package_name | slugify }}-tst-agentcore-deps --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk diff {{ cookiecutter.package_name | slugify }}-tst-agentcore-deps --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-tst-agentcore-deps-stack"]
+description = "🟢 Deploy stack agentcore-deps of tst (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-tst-agentcore-deps-stack: Deploy stack agentcore-deps of tst (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy {{ cookiecutter.package_name | slugify }}-tst-agentcore-deps --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk deploy {{ cookiecutter.package_name | slugify }}-tst-agentcore-deps --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-tst-agentcore-deps-stack"]
+description = "🔴 Destroy stack agentcore-deps of tst (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "tst" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-tst-agentcore-deps-stack: Destroy stack agentcore-deps of tst (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-tst-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-tst-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy {{ cookiecutter.package_name | slugify }}-tst-agentcore-deps --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}'
+cdk destroy {{ cookiecutter.package_name | slugify }}-tst-agentcore-deps --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_TST{% raw %}}}{% endraw %}
+"""
+
+[tasks."config-deploy-prd"]
+description = "⚙️ Deploy the config of prd to SSM Parameter Store, if it changed (writes to AWS)"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> config-deploy-prd: Deploy the config of prd to SSM Parameter Store, if it changed (writes to AWS)'
+.venv/bin/python .mise/tasks/config-deploy.py
+"""
+
+[tasks."config-delete-prd"]
+description = "🗑️ Delete the config of prd from SSM Parameter Store (writes to AWS)"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> config-delete-prd: Delete the config of prd from SSM Parameter Store (writes to AWS)'
+.venv/bin/python .mise/tasks/confirm.py --action 'Delete the config parameter of prd?' --skip_var CONFIRM_YES --skip_var CONFIRMED_BY_CHAIN
+.venv/bin/python .mise/tasks/config-delete.py
+"""
+
+[tasks."ac-deploy-prd"]
+description = "🚀 Deploy every AgentCore runtime to the prd target: check that the agentcore-deps policy and the config exist, generate the project for prd, check the wheels, deploy (writes to AWS)"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> ac-deploy-prd: Deploy every AgentCore runtime to the prd target: check that the agentcore-deps policy and the config exist, generate the project for prd, check the wheels, deploy (writes to AWS)'
+echo '--- CloudFormation console ---'
+echo 'AgentCore stack: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText=AgentCore-{{ cookiecutter.agentcore_project_name }}-prd&filteringStatus=active&viewNested=true'
+.venv/bin/python .mise/tasks/ac-check-deps.py
+.venv/bin/python .mise/tasks/ac-gen.py
+.venv/bin/python .mise/tasks/ac-check-wheels.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore deploy --target prd'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore deploy --target prd
+echo 'Commit agentcore/.cli/deployed-state.json if it changed: everyone who deploys shares it'
+"""
+
+[tasks."ac-down-prd"]
+description = "🔴 Destroy every AgentCore runtime of the prd target: deploy an empty project with --yes, then generate the real one again, even if the deploy fails (writes to AWS; keeps the agentcore-deps stack and the config)"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> ac-down-prd: Destroy every AgentCore runtime of the prd target: deploy an empty project with --yes, then generate the real one again, even if the deploy fails (writes to AWS; keeps the agentcore-deps stack and the config)'
+.venv/bin/python .mise/tasks/confirm.py --action 'Destroy every AgentCore runtime of prd?' --skip_var CONFIRM_YES --skip_var CONFIRMED_BY_CHAIN
+echo '--- CloudFormation console ---'
+echo 'AgentCore stack: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText=AgentCore-{{ cookiecutter.agentcore_project_name }}-prd&filteringStatus=active&viewNested=true'
+.venv/bin/python .mise/tasks/ac-gen-teardown.py
+trap '.venv/bin/python .mise/tasks/ac-gen.py' EXIT
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore deploy --target prd --yes'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore deploy --target prd --yes
+echo 'Commit agentcore/.cli/deployed-state.json if it changed: everyone who deploys shares it'
+"""
+
+[tasks."ac-status-prd"]
+description = "🔎 Show the deployed AgentCore runtimes of the prd target (reads AWS)"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> ac-status-prd: Show the deployed AgentCore runtimes of the prd target (reads AWS)'
+echo '--- CloudFormation console ---'
+echo 'AgentCore stack: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText=AgentCore-{{ cookiecutter.agentcore_project_name }}-prd&filteringStatus=active&viewNested=true'
+.venv/bin/python .mise/tasks/ac-gen.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore status --target prd'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore status --target prd
+"""
+
+[tasks."ac-invoke-prd-power-plant-mcp"]
+description = "🤖 Invoke the deployed PowerPlantMcp of prd with its sample payload; SESSION_ID=<id> continues a session (calls AWS)"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> ac-invoke-prd-power-plant-mcp: Invoke the deployed PowerPlantMcp of prd with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+PAYLOAD='{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_site", "arguments": {"site_id": "S-03"{% raw %}}}{% endraw %}}'
+echo '--- Run command ---'
+echo "AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore invoke --target prd --runtime PowerPlantMcp --mcp-method tools/call --mcp-name get_site --payload '$PAYLOAD' ${SESSION_ID:+--session-id $SESSION_ID}"
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore invoke --target prd --runtime PowerPlantMcp --mcp-method tools/call --mcp-name get_site --payload "$PAYLOAD" ${SESSION_ID:+--session-id $SESSION_ID}
+"""
+
+[tasks."ac-invoke-prd-site-agent"]
+description = "🤖 Invoke the deployed SiteAgent of prd with its sample payload; SESSION_ID=<id> continues a session (calls AWS)"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> ac-invoke-prd-site-agent: Invoke the deployed SiteAgent of prd with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+PAYLOAD='{"prompt": "Can we send someone to inspect the turbines at site S-03 tomorrow? Who is assigned there?"}'
+echo '--- Run command ---'
+echo "AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore invoke --target prd --runtime SiteAgent --payload '$PAYLOAD' ${SESSION_ID:+--session-id $SESSION_ID}"
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore invoke --target prd --runtime SiteAgent --payload "$PAYLOAD" ${SESSION_ID:+--session-id $SESSION_ID}
+"""
+
+[tasks."ac-logs-prd-power-plant-mcp"]
+description = "📜 Show the recent logs of the deployed PowerPlantMcp of prd; SINCE=2h looks further back (reads AWS)"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> ac-logs-prd-power-plant-mcp: Show the recent logs of the deployed PowerPlantMcp of prd; SINCE=2h looks further back (reads AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore logs runtime --name PowerPlantMcp --target prd --since ${SINCE:-30m}'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore logs runtime --name PowerPlantMcp --target prd --since ${SINCE:-30m}
+"""
+
+[tasks."ac-logs-prd-site-agent"]
+description = "📜 Show the recent logs of the deployed SiteAgent of prd; SINCE=2h looks further back (reads AWS)"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> ac-logs-prd-site-agent: Show the recent logs of the deployed SiteAgent of prd; SINCE=2h looks further back (reads AWS)'
+.venv/bin/python .mise/tasks/ac-gen.py
+echo '--- Run command ---'
+echo 'AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore logs runtime --name SiteAgent --target prd --since ${SINCE:-30m}'
+AWS_PROFILE={% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %} agentcore logs runtime --name SiteAgent --target prd --since ${SINCE:-30m}
+"""
+
+[tasks."ac-chain-up-prd"]
+description = "🚀 Deploy everything AgentCore of prd: config-deploy-prd → cdk-up-prd-agentcore-deps-stack → ac-deploy-prd"
+run = [
+    "echo '=== ac-chain-up-prd: Deploy everything AgentCore of prd, in this order ==='",
+    "echo '  1. config-deploy-prd: Deploy the config of prd to SSM Parameter Store, if it changed (writes to AWS)'",
+    "echo '  2. cdk-up-prd-agentcore-deps-stack: Deploy stack agentcore-deps of prd (no approval prompt)'",
+    "echo '  3. ac-deploy-prd: Deploy every AgentCore runtime to the prd target: check that the agentcore-deps policy and the config exist, generate the project for prd, check the wheels, deploy (writes to AWS)'",
+    { task = "config-deploy-prd" },
+    { task = "cdk-up-prd-agentcore-deps-stack" },
+    { task = "ac-deploy-prd" },
+    "echo '=== ac-chain-up-prd: done ==='",
+]
+
+[tasks."ac-chain-down-prd"]
+description = "🔴 Destroy everything AgentCore of prd: ac-down-prd → cdk-down-prd-agentcore-deps-stack → config-delete-prd"
+env = { CONFIRMED_BY_CHAIN = "true" }
+run = [
+    "echo '=== ac-chain-down-prd: Destroy everything AgentCore of prd, in this order ==='",
+    "echo '  1. ac-down-prd: Destroy every AgentCore runtime of the prd target: deploy an empty project with --yes, then generate the real one again, even if the deploy fails (writes to AWS; keeps the agentcore-deps stack and the config)'",
+    "echo '  2. cdk-down-prd-agentcore-deps-stack: Destroy stack agentcore-deps of prd (force, no confirmation)'",
+    "echo '  3. config-delete-prd: Delete the config of prd from SSM Parameter Store (writes to AWS)'",
+    ".venv/bin/python .mise/tasks/confirm.py --action 'Destroy the AgentCore runtimes, the agentcore-deps stack, and the config of prd?' --skip_var CONFIRM_YES",
+    { task = "ac-down-prd" },
+    { task = "cdk-down-prd-agentcore-deps-stack" },
+    { task = "config-delete-prd" },
+    "echo '=== ac-chain-down-prd: done ==='",
+]
+
+[tasks."ac-test-prd"]
+description = "🧪 Test the deployed AgentCore runtimes of prd: ac-status-prd → ac-invoke-prd-power-plant-mcp → ac-invoke-prd-site-agent"
+run = [
+    "echo '=== ac-test-prd: Test the deployed AgentCore runtimes of prd, in this order ==='",
+    "echo '  1. ac-status-prd: Show the deployed AgentCore runtimes of the prd target (reads AWS)'",
+    "echo '  2. ac-invoke-prd-power-plant-mcp: Invoke the deployed PowerPlantMcp of prd with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'",
+    "echo '  3. ac-invoke-prd-site-agent: Invoke the deployed SiteAgent of prd with its sample payload; SESSION_ID=<id> continues a session (calls AWS)'",
+    { task = "ac-status-prd" },
+    { task = "ac-invoke-prd-power-plant-mcp" },
+    { task = "ac-invoke-prd-site-agent" },
+    "echo '=== ac-test-prd: done ==='",
+]
+
+[tasks."cdk-synth-prd-all"]
+description = "⚪ Synthesize all stacks of prd to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-prd-all: Synthesize all stacks of prd to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-prd-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-prd-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth'
+cdk synth
+"""
+
+[tasks."cdk-plan-prd-all"]
+description = "🔵 Plan all stacks of prd: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-prd-all: Plan all stacks of prd: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-prd-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-prd-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff --all --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk diff --all --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-prd-all"]
+description = "🟢 Deploy all stacks of prd (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-prd-all: Deploy all stacks of prd (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-prd-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-prd-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy --all --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk deploy --all --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-prd-all"]
+description = "🔴 Destroy all stacks of prd (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-prd-all: Destroy all stacks of prd (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-alerts&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-prd-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-publisher&filteringStatus=active&viewNested=true'
+echo '{{ cookiecutter.package_name | slugify }}-prd-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy --all --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk destroy --all --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-synth-prd-alerts-stack"]
+description = "⚪ Synthesize stack alerts of prd to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-prd-alerts-stack: Synthesize stack alerts of prd to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth {{ cookiecutter.package_name | slugify }}-prd-alerts --exclusively'
+cdk synth {{ cookiecutter.package_name | slugify }}-prd-alerts --exclusively
+"""
+
+[tasks."cdk-plan-prd-alerts-stack"]
+description = "🔵 Plan stack alerts of prd: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-prd-alerts-stack: Plan stack alerts of prd: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff {{ cookiecutter.package_name | slugify }}-prd-alerts --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk diff {{ cookiecutter.package_name | slugify }}-prd-alerts --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-prd-alerts-stack"]
+description = "🟢 Deploy stack alerts of prd (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-prd-alerts-stack: Deploy stack alerts of prd (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy {{ cookiecutter.package_name | slugify }}-prd-alerts --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk deploy {{ cookiecutter.package_name | slugify }}-prd-alerts --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-prd-alerts-stack"]
+description = "🔴 Destroy stack alerts of prd (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-prd-alerts-stack: Destroy stack alerts of prd (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-alerts: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-alerts&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy {{ cookiecutter.package_name | slugify }}-prd-alerts --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk destroy {{ cookiecutter.package_name | slugify }}-prd-alerts --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-synth-prd-publisher-stack"]
+description = "⚪ Synthesize stack publisher of prd to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-prd-publisher-stack: Synthesize stack publisher of prd to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth {{ cookiecutter.package_name | slugify }}-prd-publisher --exclusively'
+cdk synth {{ cookiecutter.package_name | slugify }}-prd-publisher --exclusively
+"""
+
+[tasks."cdk-plan-prd-publisher-stack"]
+description = "🔵 Plan stack publisher of prd: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-prd-publisher-stack: Plan stack publisher of prd: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff {{ cookiecutter.package_name | slugify }}-prd-publisher --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk diff {{ cookiecutter.package_name | slugify }}-prd-publisher --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-prd-publisher-stack"]
+description = "🟢 Deploy stack publisher of prd (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-prd-publisher-stack: Deploy stack publisher of prd (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy {{ cookiecutter.package_name | slugify }}-prd-publisher --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk deploy {{ cookiecutter.package_name | slugify }}-prd-publisher --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-prd-publisher-stack"]
+description = "🔴 Destroy stack publisher of prd (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-prd-publisher-stack: Destroy stack publisher of prd (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-publisher: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-publisher&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy {{ cookiecutter.package_name | slugify }}-prd-publisher --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk destroy {{ cookiecutter.package_name | slugify }}-prd-publisher --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-synth-prd-agentcore-deps-stack"]
+description = "⚪ Synthesize stack agentcore-deps of prd to CloudFormation templates (no AWS call)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-synth-prd-agentcore-deps-stack: Synthesize stack agentcore-deps of prd to CloudFormation templates (no AWS call)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk synth {{ cookiecutter.package_name | slugify }}-prd-agentcore-deps --exclusively'
+cdk synth {{ cookiecutter.package_name | slugify }}-prd-agentcore-deps --exclusively
+"""
+
+[tasks."cdk-plan-prd-agentcore-deps-stack"]
+description = "🔵 Plan stack agentcore-deps of prd: diff against what is deployed, through a CloudFormation change set (no deploy)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-plan-prd-agentcore-deps-stack: Plan stack agentcore-deps of prd: diff against what is deployed, through a CloudFormation change set (no deploy)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk diff {{ cookiecutter.package_name | slugify }}-prd-agentcore-deps --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk diff {{ cookiecutter.package_name | slugify }}-prd-agentcore-deps --exclusively --method auto --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-up-prd-agentcore-deps-stack"]
+description = "🟢 Deploy stack agentcore-deps of prd (no approval prompt)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-up-prd-agentcore-deps-stack: Deploy stack agentcore-deps of prd (no approval prompt)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk deploy {{ cookiecutter.package_name | slugify }}-prd-agentcore-deps --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk deploy {{ cookiecutter.package_name | slugify }}-prd-agentcore-deps --exclusively --require-approval never --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."cdk-down-prd-agentcore-deps-stack"]
+description = "🔴 Destroy stack agentcore-deps of prd (force, no confirmation)"
+dir = "cdk"
+env = { ENV_NAME = "prd" }
+depends = ["inst"]
+run = """
+echo '>>> cdk-down-prd-agentcore-deps-stack: Destroy stack agentcore-deps of prd (force, no confirmation)'
+echo '--- CloudFormation console ---'
+echo '{{ cookiecutter.package_name | slugify }}-prd-agentcore-deps: https://{{ cookiecutter.aws_region }}.console.aws.amazon.com/cloudformation/home?region={{ cookiecutter.aws_region }}#/stacks/stackinfo?filteringText={{ cookiecutter.package_name | slugify }}-prd-agentcore-deps&filteringStatus=active&viewNested=true'
+echo '--- Run command ---'
+echo 'cdk destroy {{ cookiecutter.package_name | slugify }}-prd-agentcore-deps --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}'
+cdk destroy {{ cookiecutter.package_name | slugify }}-prd-agentcore-deps --exclusively --force --profile {% raw %}{{{% endraw %}env.AWS_PROFILE_FOR_PRD{% raw %}}}{% endraw %}
+"""
+
+[tasks."config-deploy-all"]
+description = "⚙️ Run config-deploy-<env> for every environment (writes to AWS)"
+depends = ["config-deploy-dev", "config-deploy-tst", "config-deploy-prd"]
+
+[tasks."config-delete-all"]
+description = "⚙️ Run config-delete-<env> for every environment (writes to AWS)"
+depends = ["config-delete-dev", "config-delete-tst", "config-delete-prd"]
+
+[tasks."ac-local-power-plant-mcp"]
+description = "🔌 Run the PowerPlantMcp MCP server from the repo on port 18731 (Ctrl+C to stop)"
+run = ".venv/bin/python .mise/tasks/ac-run.py --runtime PowerPlantMcp --mode local"
+depends = ["inst"]
+
+[tasks."ac-dev-power-plant-mcp"]
+description = "🏗️ Run the packaged PowerPlantMcp with agentcore dev on port 18731, config from SSM of ENV_NAME (run config-deploy-<env> first)"
+run = ".venv/bin/python .mise/tasks/ac-run.py --runtime PowerPlantMcp --mode dev"
+depends = ["ac-gen"]
+
+[tasks."ac-local-power-plant-mcp-call"]
+description = "📞 Call the local PowerPlantMcp on port 18731 with its sample payload (start it with ac-local-power-plant-mcp or ac-dev-power-plant-mcp)"
+run = ".venv/bin/python .mise/tasks/ac-run.py --runtime PowerPlantMcp --mode call"
+depends = ["inst"]
+
+[tasks."ac-local-site-agent"]
+description = "🔌 Run the SiteAgent agent from the repo on port 18732 (Ctrl+C to stop); start its MCP runtimes first: PowerPlantMcp"
+run = ".venv/bin/python .mise/tasks/ac-run.py --runtime SiteAgent --mode local"
+depends = ["inst"]
+
+[tasks."ac-dev-site-agent"]
+description = "🏗️ Run the packaged SiteAgent with agentcore dev on port 18732, config from SSM of ENV_NAME (run config-deploy-<env> first); start its MCP runtimes first: PowerPlantMcp"
+run = ".venv/bin/python .mise/tasks/ac-run.py --runtime SiteAgent --mode dev"
+depends = ["ac-gen"]
+
+[tasks."ac-local-site-agent-call"]
+description = "📞 Call the local SiteAgent on port 18732 with its sample payload (start it with ac-local-site-agent or ac-dev-site-agent)"
+run = ".venv/bin/python .mise/tasks/ac-run.py --runtime SiteAgent --mode call"
+depends = ["inst"]
+
+# </env-tasks>

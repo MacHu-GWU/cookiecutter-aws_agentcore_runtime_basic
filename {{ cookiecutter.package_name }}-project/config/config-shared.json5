@@ -1,0 +1,11 @@
+// Settings shared by every environment. Overridden by config-<env>.json5.
+// Shape and docs of every file: config/example/. Fields: Config in config_00_main.py.
+{
+  // Every AWS resource name derives from this, such as the stack name prefix.
+  project_name: "{{ cookiecutter.package_name }}",
+  // The AgentCore CLI project name: a letter, then letters and digits, at most 23 characters.
+  // Every AgentCore resource name starts with it, such as {{ cookiecutter.agentcore_project_name }}_dev_PowerPlantMcp.
+  agentcore_project_name: "{{ cookiecutter.agentcore_project_name }}",
+  // The Bedrock model (or cross-region inference profile) of the SiteAgent; override it per environment if needed.
+  site_agent_model_id: "us.amazon.nova-2-lite-v1:0",
+}

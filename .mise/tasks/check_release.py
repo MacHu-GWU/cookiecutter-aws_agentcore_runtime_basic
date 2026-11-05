@@ -47,13 +47,6 @@ def _remote_sha(dir_repo: Path, ref: str) -> str | None:
     return shas.get(f"{ref}^{{}}") or shas.get(ref)
 
 
-def _has_origin(dir_repo: Path) -> bool:
-    res = subprocess.run(
-        ["git", "remote", "get-url", "origin"], cwd=dir_repo, capture_output=True, text=True
-    )
-    return res.returncode == 0
-
-
 def _files(root: Path) -> dict[str, bytes]:
     return {
         str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()
@@ -155,12 +148,7 @@ def collect_problems() -> list[str]:
     check_artifacts(problems)
     check_seed_git(version, problems)
     check_tpl_changelog(version, problems)
-    if not _has_origin(cctpl.dir_project_root):
-        problems.append(
-            "tpl repo: no 'origin' remote. Create the GitHub repo "
-            f"{cctpl.GITHUB_OWNER}/{cctpl.GITHUB_REPO} and add it as origin"
-        )
-    elif _remote_sha(cctpl.dir_project_root, f"refs/tags/{version}") is not None:
+    if _remote_sha(cctpl.dir_project_root, f"refs/tags/{version}") is not None:
         problems.append(
             f"tpl repo: tag {version} already exists on the remote. A published version is "
             "never overwritten; bump the version in the seed"
